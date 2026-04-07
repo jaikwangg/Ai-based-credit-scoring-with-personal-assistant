@@ -1,0 +1,14 @@
+
+> credit-scoring@1.0.0 dev
+> next dev -p 3011
+
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3011
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 2s
+ ○ Compiling / ...
+ ✓ Compiled / in 3.7s (509 modules)
+ GET / 200 in 3985ms
+ ✓ Compiled in 346ms (262 modules)

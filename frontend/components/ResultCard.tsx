@@ -1,0 +1,443 @@
+'use client';
+
+import { CreditInput } from '@/types/credit';
+
+interface ResultCardProps {
+  prediction: number;
+  confidence: number;
+  shapValues: Record<string, number>;
+  modelExplanation?: string;
+  plannerExplanation?: string;
+  plannerError?: string | null;
+  userInput: CreditInput;
+  onTalkToAssistant: () => void;
+  onBack?: () => void;
+}
+
+const FEATURE_LABELS_TH: Record<string, string> = {
+  Sex: 'เพศ',
+  Occupation: 'อาชีพ',
+  Salary: 'รายได้',
+  Marriage_Status: 'สถานภาพสมรส',
+  credit_score: 'คะแนนเครดิต',
+  credit_grade: 'เกรดเครดิต',
+  outstanding: 'หนี้คงค้าง',
+  overdue: 'ยอดค้างชำระ',
+  Coapplicant: 'ผู้กู้ร่วม',
+  loan_amount: 'วงเงินขอกู้',
+  loan_term: 'ระยะเวลากู้',
+  Interest_rate: 'อัตราดอกเบี้ย',
+  has_overdue: 'สถานะค้างชำระ',
+  dti: 'DTI (หนี้/รายได้)',
+  lti: 'LTI (วงเงิน/รายได้)',
+};
+
+function labelTh(name: string): string {
+  return FEATURE_LABELS_TH[name] || name.replace(/_/g, ' ');
+}
+
+type MetricStatus = 'good' | 'warn' | 'bad' | 'neutral';
+
+export default function ResultCard({
+  prediction,
+  confidence,
+  shapValues,
+  modelExplanation,
+  plannerExplanation,
+  plannerError,
+  userInput,
+  onTalkToAssistant,
+  onBack,
+}: ResultCardProps) {
+  const approved = prediction === 1;
+  const pct = Math.round(confidence * 100);
+
+  const entries = Object.entries(shapValues || {});
+  const positive = entries
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  const negative = entries
+    .filter(([, v]) => v < 0)
+    .sort((a, b) => a[1] - b[1])
+    .slice(0, 5);
+  const maxAbs = Math.max(...entries.map(([, v]) => Math.abs(v)), 1e-9);
+
+  const salary = parseFloat(userInput.Salary) || 0;
+  const outstanding = parseFloat(userInput.outstanding) || 0;
+  const loanAmount = parseFloat(userInput.loan_amount) || 0;
+  const creditScoreNum = parseInt(userInput.credit_score || '0', 10) || 0;
+  const dti = salary > 0 ? outstanding / salary : 0;
+  const lti = salary > 0 ? loanAmount / salary : 0;
+
+  const dtiStatus: MetricStatus = dti < 0.4 ? 'good' : dti < 0.6 ? 'warn' : 'bad';
+  const ltiStatus: MetricStatus = lti < 5 ? 'good' : lti < 10 ? 'warn' : 'bad';
+  const scoreStatus: MetricStatus =
+    creditScoreNum >= 700 ? 'good' : creditScoreNum >= 600 ? 'warn' : creditScoreNum > 0 ? 'bad' : 'neutral';
+
+  // Sanity check: model might approve profiles that are obviously unrealistic
+  // (e.g. tiny income vs huge loan). Flag this mismatch to the user regardless
+  // of what the ML model says — the LGBM model is trained on a research dataset
+  // and can give nonsensical outputs outside its training distribution.
+  const modelContradicted =
+    approved &&
+    salary > 0 &&
+    (dti >= 1 || lti >= 40 || (creditScoreNum > 0 && creditScoreNum < 500));
+
+  return (
+    <div className="space-y-6">
+      {onBack && (
+        <button
+          onClick={onBack}
+          className="text-sm text-gray-600 hover:text-gray-900 font-medium"
+        >
+          {'<'} กลับไปกรอกข้อมูล
+        </button>
+      )}
+
+      {modelContradicted && (
+        <div className="bg-orange-50 border-l-4 border-orange-400 rounded-lg p-4">
+          <div className="flex items-start">
+            <span className="text-orange-500 text-xl mr-3">⚠</span>
+            <div className="flex-1">
+              <p className="font-semibold text-orange-900">
+                คำเตือน: ผลโมเดลอาจไม่สอดคล้องกับโปรไฟล์จริง
+              </p>
+              <p className="text-sm text-orange-800 mt-1">
+                แม้โมเดลประเมินว่ามีแนวโน้มอนุมัติ ({pct}%) แต่ตัวชี้วัดทางการเงิน
+                {dti >= 1 && ` DTI สูงมาก (${(dti * 100).toFixed(0)}%)`}
+                {lti >= 40 && ` LTI สูงมาก (${lti.toFixed(0)} เท่าของรายได้)`}
+                {creditScoreNum > 0 && creditScoreNum < 500 && ` คะแนนเครดิตต่ำ (${creditScoreNum})`}
+                {' '}อยู่นอกช่วงที่สถาบันการเงินจริงจะพิจารณาอนุมัติได้ — โปรดตรวจสอบข้อมูลที่กรอก
+                หรืออ่านคำแนะนำจาก AI ด้านล่างอย่างละเอียด
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Hero: Decision + Probability gauge ───────────────────────── */}
+      <div
+        className={`bg-white rounded-2xl shadow-lg overflow-hidden border-t-8 ${
+          approved ? 'border-green-500' : 'border-red-500'
+        }`}
+      >
+        <div className="p-6 md:p-8">
+          <div className="flex items-start justify-between gap-4 mb-6">
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">
+                ผลการประเมินสินเชื่อ
+              </p>
+              <h1
+                className={`text-3xl md:text-4xl font-bold mt-2 ${
+                  approved ? 'text-green-600' : 'text-red-600'
+                }`}
+              >
+                {approved ? 'มีแนวโน้มอนุมัติ' : 'มีความเสี่ยงถูกปฏิเสธ'}
+              </h1>
+              <p className="text-sm text-gray-600 mt-1">
+                {approved
+                  ? 'โปรไฟล์ของคุณอยู่ในเกณฑ์ที่สถาบันการเงินมีแนวโน้มพิจารณาอนุมัติ'
+                  : 'โปรไฟล์ของคุณยังต่ำกว่าเกณฑ์อนุมัติ ต้องปรับปรุงปัจจัยเสี่ยงก่อนยื่นใหม่'}
+              </p>
+            </div>
+            <div
+              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-bold tracking-wide ${
+                approved ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+              }`}
+            >
+              {approved ? '✓ APPROVED' : '✗ DECLINED'}
+            </div>
+          </div>
+
+          {/* Probability Gauge */}
+          <div className="mt-6">
+            <div className="flex justify-between items-baseline mb-2">
+              <span className="text-sm font-medium text-gray-700">
+                โอกาสได้รับการอนุมัติ (P-approve)
+              </span>
+              <span
+                className={`text-3xl font-bold ${
+                  approved ? 'text-green-600' : 'text-red-600'
+                }`}
+              >
+                {pct}%
+              </span>
+            </div>
+            <div className="relative w-full h-5 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className={`absolute left-0 top-0 h-full transition-all duration-1000 ${
+                  approved
+                    ? 'bg-gradient-to-r from-green-400 to-green-600'
+                    : 'bg-gradient-to-r from-red-400 to-red-600'
+                }`}
+                style={{ width: `${pct}%` }}
+              />
+              <div className="absolute top-0 bottom-0 left-1/2 w-0.5 bg-gray-700 opacity-40" />
+            </div>
+            <div className="flex justify-between text-xs text-gray-500 mt-1.5">
+              <span>0%</span>
+              <span className="font-medium">50% เกณฑ์ตัดสิน</span>
+              <span>100%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Key Metrics Grid ─────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <MetricCard
+          label="DTI"
+          sub="หนี้/รายได้"
+          value={
+            salary > 0
+              ? dti >= 10
+                ? '>1000%'
+                : `${(dti * 100).toFixed(0)}%`
+              : '—'
+          }
+          status={salary > 0 ? dtiStatus : 'neutral'}
+          hint={
+            salary === 0
+              ? 'ไม่มีข้อมูลรายได้'
+              : dtiStatus === 'good'
+              ? 'อยู่ในเกณฑ์ดี (<40%)'
+              : dtiStatus === 'warn'
+              ? 'ควรลด (40-60%)'
+              : 'สูงเกินเกณฑ์'
+          }
+        />
+        <MetricCard
+          label="LTI"
+          sub="วงเงิน/รายได้"
+          value={
+            salary > 0
+              ? lti >= 1000
+                ? '>1000x'
+                : `${lti.toFixed(1)}x`
+              : '—'
+          }
+          status={salary > 0 ? ltiStatus : 'neutral'}
+          hint={
+            salary === 0
+              ? '—'
+              : ltiStatus === 'good'
+              ? 'พอเหมาะ (<5x)'
+              : ltiStatus === 'warn'
+              ? 'ค่อนข้างสูง (5-10x)'
+              : 'สูงเกินเกณฑ์'
+          }
+        />
+        <MetricCard
+          label="คะแนนเครดิต"
+          sub="Credit Score"
+          value={creditScoreNum > 0 ? creditScoreNum.toString() : '—'}
+          status={scoreStatus}
+          hint={`เกรด ${userInput.credit_grade || '—'}`}
+        />
+        <MetricCard
+          label="วงเงินขอกู้"
+          sub="Loan amount"
+          value={
+            loanAmount > 0
+              ? `฿${loanAmount.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+              : '—'
+          }
+          status="neutral"
+          hint={`ดอกเบี้ย ${userInput.Interest_rate || 0}%`}
+        />
+      </div>
+
+      {/* ── SHAP Drivers: Positive / Negative ────────────────────────── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white rounded-2xl shadow-sm p-6 border border-green-100">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-green-700 flex items-center">
+              <span className="w-7 h-7 rounded-full bg-green-100 text-green-700 flex items-center justify-center mr-2 text-sm">
+                ✓
+              </span>
+              ปัจจัยบวก
+            </h3>
+            <span className="text-xs text-gray-500">ช่วยเพิ่มโอกาสอนุมัติ</span>
+          </div>
+          {positive.length > 0 ? (
+            <div className="space-y-3">
+              {positive.map(([name, val]) => (
+                <DriverBar
+                  key={name}
+                  label={labelTh(name)}
+                  value={val}
+                  maxAbs={maxAbs}
+                  positive
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400 italic">ไม่พบปัจจัยบวกที่มีผลชัดเจน</p>
+          )}
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-sm p-6 border border-red-100">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-red-700 flex items-center">
+              <span className="w-7 h-7 rounded-full bg-red-100 text-red-700 flex items-center justify-center mr-2 text-sm">
+                ✗
+              </span>
+              ปัจจัยลบ
+            </h3>
+            <span className="text-xs text-gray-500">ลดโอกาสอนุมัติ</span>
+          </div>
+          {negative.length > 0 ? (
+            <div className="space-y-3">
+              {negative.map(([name, val]) => (
+                <DriverBar
+                  key={name}
+                  label={labelTh(name)}
+                  value={val}
+                  maxAbs={maxAbs}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400 italic">ไม่พบปัจจัยลบที่มีผลชัดเจน</p>
+          )}
+        </div>
+      </div>
+
+      {/* ── Preview of AI guidance ─────────────────────────────────── */}
+      {plannerExplanation && (
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-6 border border-blue-100">
+          <div className="flex items-center mb-3">
+            <span className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm">
+              AI
+            </span>
+            <h3 className="text-lg font-semibold text-gray-900">สรุปคำแนะนำจาก AI</h3>
+          </div>
+          <p className="text-gray-800 whitespace-pre-wrap leading-relaxed text-sm line-clamp-4">
+            {plannerExplanation}
+          </p>
+          <button
+            onClick={onTalkToAssistant}
+            className="mt-3 text-sm font-semibold text-blue-700 hover:text-blue-900"
+          >
+            ดูคำแนะนำเต็ม + แหล่งอ้างอิง →
+          </button>
+        </div>
+      )}
+
+      {/* ── Technical fallback details (collapsed) ─────────────────── */}
+      {modelExplanation && (
+        <details className="bg-gray-50 rounded-xl border border-gray-200 overflow-hidden">
+          <summary className="cursor-pointer px-4 py-3 font-medium text-gray-700 text-sm hover:bg-gray-100">
+            ข้อมูลทางเทคนิค (Raw SHAP breakdown)
+          </summary>
+          <div className="px-4 py-3 border-t border-gray-200 text-xs text-gray-600 whitespace-pre-wrap font-mono">
+            {modelExplanation}
+          </div>
+        </details>
+      )}
+
+      {plannerError && (
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-xl text-sm text-yellow-900">
+          <span className="font-semibold">⚠ Planner status:</span> {plannerError}
+        </div>
+      )}
+
+      {/* ── CTA ──────────────────────────────────────────────────── */}
+      <button
+        onClick={onTalkToAssistant}
+        className="w-full bg-primary-600 hover:bg-primary-700 text-white py-4 px-6 rounded-xl font-semibold text-lg shadow-md hover:shadow-lg transition-all"
+      >
+        คุยกับ AI Personal Assistant →
+      </button>
+    </div>
+  );
+}
+
+function MetricCard({
+  label,
+  sub,
+  value,
+  status,
+  hint,
+}: {
+  label: string;
+  sub?: string;
+  value: string;
+  status: MetricStatus;
+  hint?: string;
+}) {
+  const palette: Record<MetricStatus, { border: string; bg: string; text: string; dot: string }> = {
+    good: {
+      border: 'border-green-200',
+      bg: 'bg-white',
+      text: 'text-green-700',
+      dot: 'bg-green-500',
+    },
+    warn: {
+      border: 'border-yellow-200',
+      bg: 'bg-white',
+      text: 'text-yellow-700',
+      dot: 'bg-yellow-500',
+    },
+    bad: {
+      border: 'border-red-200',
+      bg: 'bg-white',
+      text: 'text-red-700',
+      dot: 'bg-red-500',
+    },
+    neutral: {
+      border: 'border-gray-200',
+      bg: 'bg-white',
+      text: 'text-gray-700',
+      dot: 'bg-gray-400',
+    },
+  };
+  const c = palette[status];
+  return (
+    <div className={`rounded-xl p-4 border ${c.border} ${c.bg} shadow-sm`}>
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</p>
+        <span className={`w-2 h-2 rounded-full ${c.dot}`} />
+      </div>
+      {sub && <p className="text-[10px] text-gray-400 mb-1">{sub}</p>}
+      <p className={`text-2xl font-bold mt-1 ${c.text}`}>{value}</p>
+      {hint && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
+    </div>
+  );
+}
+
+function DriverBar({
+  label,
+  value,
+  maxAbs,
+  positive,
+}: {
+  label: string;
+  value: number;
+  maxAbs: number;
+  positive?: boolean;
+}) {
+  const width = Math.max(4, (Math.abs(value) / maxAbs) * 100);
+  return (
+    <div>
+      <div className="flex justify-between items-baseline text-sm mb-1">
+        <span className="text-gray-800 font-medium">{label}</span>
+        <span
+          className={`font-mono text-xs ${positive ? 'text-green-600' : 'text-red-600'}`}
+        >
+          {value > 0 ? '+' : ''}
+          {value.toFixed(3)}
+        </span>
+      </div>
+      <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-700 ${
+            positive ? 'bg-green-500' : 'bg-red-500'
+          }`}
+          style={{ width: `${width}%` }}
+        />
+      </div>
+    </div>
+  );
+}

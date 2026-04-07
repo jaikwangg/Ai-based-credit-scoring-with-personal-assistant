@@ -1,0 +1,24 @@
+
+> credit-scoring@1.0.0 dev
+> next dev
+
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 2.2s
+ ✓ Compiled /api/health in 399ms (56 modules)
+ GET /api/health 200 in 926ms
+ GET /api/health 200 in 412ms
+ ✓ Compiled /api/predict in 107ms (58 modules)
+ POST /api/predict 200 in 8721ms
+ ✓ Compiled /api/rag/query in 71ms (60 modules)
+ POST /api/rag/query 503 in 8507ms
+ GET /api/health 200 in 531ms
+ POST /api/predict 200 in 532ms
+ POST /api/rag/query 200 in 393ms
+ GET /api/health 200 in 393ms
+ POST /api/predict 200 in 427ms
+ POST /api/rag/query 200 in 393ms
+[?25h
