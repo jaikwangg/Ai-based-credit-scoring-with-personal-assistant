@@ -42,6 +42,46 @@ export interface RagQueryResponse {
   }>;
 }
 
+// === Profile-conditioned Advisor (Approach 1) =================================
+
+export interface AdvisorProfile {
+  salary_per_month?: number;
+  occupation?: string;
+  employment_tenure_months?: number;
+  marriage_status?: string;
+  has_coapplicant?: boolean;
+  coapplicant_income?: number;
+  credit_score?: number;
+  credit_grade?: string;
+  outstanding_debt?: number;
+  overdue_amount?: number;
+  loan_amount_requested?: number;
+  loan_term_years?: number;
+  interest_rate?: number;
+}
+
+export interface AdvisorRequirementCheck {
+  requirement: string;
+  user_value: string;
+  status: 'pass' | 'fail' | 'unknown' | 'not_applicable';
+  explanation: string;
+}
+
+export interface AdvisorResponse {
+  question: string;
+  verdict: 'eligible' | 'partially_eligible' | 'ineligible' | 'needs_more_info';
+  verdict_summary: string;
+  requirement_checks: AdvisorRequirementCheck[];
+  recommended_actions: string[];
+  sources: Array<{
+    title?: string;
+    category?: string;
+    institution?: string;
+    score?: number;
+  }>;
+  raw_answer?: string;
+}
+
 export interface ApiError {
   detail?: string;
   error?: string;
@@ -109,6 +149,28 @@ export async function queryAssistantRag(question: string, topK?: number): Promis
 
   if (!response.ok) {
     throw new Error(await getErrorMessage(response, 'Failed to query assistant'));
+  }
+
+  return response.json();
+}
+
+/**
+ * Profile-conditioned advisor — runs structured eligibility reasoning over
+ * the RAG index instead of paraphrasing chunks (Approach 1).
+ */
+export async function queryAdvisor(
+  question: string,
+  profile: AdvisorProfile,
+  topK?: number
+): Promise<AdvisorResponse> {
+  const response = await fetch(`${API_BASE_URL}/rag/advisor`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, profile, top_k: topK }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await getErrorMessage(response, 'Failed to query advisor'));
   }
 
   return response.json();

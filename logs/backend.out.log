@@ -1,4 +1,4 @@
 Loading model from: C:\Users\Kanna\OneDrive\Documents\GitHub\Ai-based-credit-scoring-with-personal-assistant\backend\model\lgbm_model.pkl
 Model loaded successfully
-INFO:     127.0.0.1:62647 - "GET /health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62651 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49679 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49686 - "GET /health HTTP/1.1" 200 OK

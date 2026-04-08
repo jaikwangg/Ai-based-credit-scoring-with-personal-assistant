@@ -7,6 +7,6 @@
   - Environments: .env.local
 
  ✓ Starting...
- ✓ Ready in 1856ms
- ✓ Compiled /api/health in 99ms (56 modules)
- GET /api/health 200 in 396ms
+ ✓ Ready in 1531ms
+ ✓ Compiled /api/health in 92ms (56 modules)
+ GET /api/health 200 in 385ms

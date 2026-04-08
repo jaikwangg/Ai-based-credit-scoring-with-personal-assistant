@@ -417,3 +417,50 @@ async def rag_query(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail=err)
 
     return result or {"question": question.strip(), "answer": "", "sources": []}
+
+
+PLANNER_ADVISOR_PATH = os.getenv("PLANNER_ADVISOR_PATH", "/api/v1/rag/advisor")
+
+
+@app.post("/rag/advisor")
+async def rag_advisor(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Bridge to planner /rag/advisor.
+
+    Accepts {question, profile{...}} and forwards to the planner's
+    profile-conditioned advisory endpoint. Profile fields are passed through
+    untouched — the planner schema validates them.
+    """
+    question = payload.get("question")
+    if not isinstance(question, str) or not question.strip():
+        raise HTTPException(status_code=422, detail="question is required")
+
+    profile = payload.get("profile") or {}
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=422, detail="profile must be an object")
+
+    request_payload: Dict[str, Any] = {
+        "question": question.strip(),
+        "profile": profile,
+    }
+    top_k = payload.get("top_k")
+    if isinstance(top_k, int) and top_k > 0:
+        request_payload["top_k"] = top_k
+
+    advisor_url = f"{PLANNER_API_BASE_URL}{PLANNER_ADVISOR_PATH}"
+    try:
+        timeout = httpx.Timeout(PLANNER_PLAN_TIMEOUT_SECONDS)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(advisor_url, json=request_payload)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Advisor request timed out")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Advisor unreachable: {exc}")
+
+    if response.status_code != 200:
+        try:
+            detail = response.json().get("detail", f"Advisor returned {response.status_code}")
+        except Exception:
+            detail = f"Advisor returned {response.status_code}"
+        raise HTTPException(status_code=response.status_code, detail=str(detail))
+
+    return response.json()

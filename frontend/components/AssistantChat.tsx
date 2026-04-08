@@ -1,33 +1,79 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { queryAssistantRag } from '@/utils/api';
+import {
+  queryAssistantRag,
+  queryAdvisor,
+  AdvisorProfile,
+  AdvisorResponse,
+} from '@/utils/api';
 
 interface Message {
   id: string;
   text: string;
   isUser: boolean;
   timestamp: Date;
+  // Optional structured payload — when present, the message renders as
+  // an advisor card instead of plain text.
+  advisor?: AdvisorResponse;
 }
 
 interface AssistantChatProps {
   userProfileSummary?: string;
+  /**
+   * Structured user profile for profile-conditioned advisory. When provided,
+   * the chat will route eligibility-style questions through the /rag/advisor
+   * endpoint (which does pass/fail reasoning) instead of /rag/query (which
+   * just paraphrases retrieved chunks).
+   */
+  advisorProfile?: AdvisorProfile;
 }
 
-// Curated example questions that are VERIFIED to return valid answers from
-// the current RAG index (Thai CIMB home loan documents). These phrases match
-// the planner's DRIVER_QUERY_MAP and APPROVED_CHECKLIST_QUERIES so retrieval
-// + synthesis both succeed. Do NOT add vague questions like "วิธีปรับปรุงโปรไฟล์"
-// — they fail the synthesizer even when retrieval is fine.
-const SUGGESTED_QUESTIONS: string[] = [
+// Curated example questions verified against the current RAG index.
+// Two flavours:
+//  - factual lookups → routed through /rag/query (paraphrase mode)
+//  - eligibility/advice questions → routed through /rag/advisor (reasoning mode)
+//    when an advisorProfile is available.
+const FACTUAL_QUESTIONS: string[] = [
   'เอกสารที่ต้องใช้สมัครสินเชื่อบ้านมีอะไรบ้าง',
-  'ต้องมีคุณสมบัติอย่างไรถึงจะกู้บ้านได้',
   'รายได้ขั้นต่ำเท่าไหร่ถึงจะกู้บ้านได้',
   'ผ่อนไม่ไหวต้องทำอย่างไร ปรับโครงสร้างหนี้',
 ];
 
+const ADVISORY_QUESTIONS: string[] = [
+  'จากโปรไฟล์ของฉัน มีโอกาสกู้ได้ไหม',
+  'ฉันควรปรับปรุงอะไรบ้างเพื่อให้ผ่านเกณฑ์',
+  'โปรไฟล์ของฉันผ่านเกณฑ์รายได้ขั้นต่ำหรือไม่',
+];
+
+/**
+ * Heuristic: should this question be answered by the profile-conditioned
+ * advisor (structured eligibility reasoning) instead of plain RAG?
+ */
+function shouldUseAdvisor(question: string, hasProfile: boolean): boolean {
+  if (!hasProfile) return false;
+  const triggers = [
+    'กู้ได้ไหม',
+    'อนุมัติ',
+    'มีโอกาส',
+    'ผมจะ',
+    'ฉันจะ',
+    'โปรไฟล์',
+    'คุณสมบัติ',
+    'ผ่านเกณฑ์',
+    'ปรับปรุง',
+    'แนะนำ',
+    'ควรทำ',
+    'ทำยังไง',
+    'eligible',
+    'qualify',
+  ];
+  return triggers.some((t) => question.includes(t));
+}
+
 export default function AssistantChat({
   userProfileSummary,
+  advisorProfile,
 }: AssistantChatProps) {
   // Chat welcome is INTENTIONALLY a short greeting, not the planner report.
   // The full report is already displayed above the chat in AssistantPanel.
@@ -72,42 +118,57 @@ export default function AssistantChat({
     setIsTyping(true);
 
     try {
-      // Send the question as-is. Prepending a profile summary like
-      // "ข้อมูลผู้ใช้: อาชีพ X, ดอกเบี้ย 5%..." pollutes the embedding and
-      // confuses the query router — e.g. it routed generic questions to
-      // `interest_structure` just because "5%" appeared in the prefix, then
-      // synthesis returned "ไม่พบข้อมูลในเอกสารที่มีอยู่".
-      void userProfileSummary; // reserved for future in-chat context UX
-      const rag = await queryAssistantRag(text);
-      const rawAnswer = (rag.answer || '').trim();
-      const ragFailed = !rawAnswer || /ไม่พบข้อมูลในเอกสาร/.test(rawAnswer);
+      void userProfileSummary; // legacy prop, kept for backwards compat
 
-      const sourceText =
-        rag.sources && rag.sources.length > 0
-          ? `\n\nแหล่งอ้างอิง:\n${rag.sources
-              .slice(0, 3)
-              .map(
-                (s, idx) =>
-                  `[${idx + 1}] ${s.title || 'ไม่ระบุชื่อเอกสาร'}${
-                    s.category ? ` (${s.category})` : ''
-                  }`
-              )
-              .join('\n')}`
-          : '';
+      // Decide between profile-conditioned advisor and plain RAG.
+      // Advisor: when profile is present AND the question is eligibility-style.
+      // Plain RAG: for general factual lookups ("เอกสารใช้อะไรบ้าง").
+      const useAdvisor = shouldUseAdvisor(text, !!advisorProfile);
 
-      const aiText = ragFailed
-        ? 'ขออภัย ไม่พบข้อมูลตรงกับคำถามนี้ในเอกสารที่มีอยู่ ลองใช้คำถามที่เจาะจงกว่า เช่น "เอกสารที่ต้องใช้สมัครสินเชื่อบ้านมีอะไรบ้าง" หรือเลือกจากคำถามแนะนำด้านล่าง'
-        : `${rawAnswer}${sourceText}`;
+      if (useAdvisor && advisorProfile) {
+        const advisor = await queryAdvisor(text, advisorProfile);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            text: advisor.verdict_summary || 'วิเคราะห์เสร็จแล้ว',
+            isUser: false,
+            timestamp: new Date(),
+            advisor,
+          },
+        ]);
+      } else {
+        const rag = await queryAssistantRag(text);
+        const rawAnswer = (rag.answer || '').trim();
+        const ragFailed = !rawAnswer || /ไม่พบข้อมูลในเอกสาร/.test(rawAnswer);
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          text: aiText,
-          isUser: false,
-          timestamp: new Date(),
-        },
-      ]);
+        const sourceText =
+          rag.sources && rag.sources.length > 0
+            ? `\n\nแหล่งอ้างอิง:\n${rag.sources
+                .slice(0, 3)
+                .map(
+                  (s, idx) =>
+                    `[${idx + 1}] ${s.title || 'ไม่ระบุชื่อเอกสาร'}${
+                      s.category ? ` (${s.category})` : ''
+                    }`
+                )
+                .join('\n')}`
+            : '';
+
+        const aiText = ragFailed
+          ? 'ขออภัย ไม่พบข้อมูลตรงกับคำถามนี้ในเอกสารที่มีอยู่ ลองใช้คำถามที่เจาะจงกว่า หรือเลือกจากคำถามแนะนำด้านล่าง'
+          : `${rawAnswer}${sourceText}`;
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            text: aiText,
+            isUser: false,
+            timestamp: new Date(),
+          },
+        ]);
+      }
     } catch (error) {
       const detail =
         error instanceof Error && error.message
@@ -154,29 +215,58 @@ export default function AssistantChat({
               className={`max-w-[85%] rounded-lg p-3 ${
                 message.isUser
                   ? 'bg-gray-900 text-white'
+                  : message.advisor
+                  ? 'bg-white border border-gray-200 shadow-sm w-full'
                   : 'bg-gray-100 text-gray-900'
               }`}
             >
-              <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.text}</p>
+              {message.advisor ? (
+                <AdvisorCard data={message.advisor} />
+              ) : (
+                <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.text}</p>
+              )}
             </div>
           </div>
         ))}
 
         {/* Suggested question chips — only before the user has asked anything */}
         {!userHasAsked && !isTyping && (
-          <div className="pt-1">
-            <p className="text-xs text-gray-500 mb-2 font-medium">คำถามแนะนำ</p>
-            <div className="flex flex-wrap gap-2">
-              {SUGGESTED_QUESTIONS.map((q) => (
-                <button
-                  key={q}
-                  type="button"
-                  onClick={() => askRag(q)}
-                  className="text-xs px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-full hover:bg-gray-50 hover:border-gray-400 transition-colors"
-                >
-                  {q}
-                </button>
-              ))}
+          <div className="pt-1 space-y-3">
+            {advisorProfile && (
+              <div>
+                <p className="text-xs text-gray-500 mb-2 font-medium">
+                  วิเคราะห์โปรไฟล์ของคุณ (ต้องใช้การคิดวิเคราะห์)
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {ADVISORY_QUESTIONS.map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      onClick={() => askRag(q)}
+                      className="text-xs px-3 py-2 bg-gray-900 text-white rounded-full hover:bg-black transition-colors"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div>
+              <p className="text-xs text-gray-500 mb-2 font-medium">
+                คำถามทั่วไปจากเอกสาร
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {FACTUAL_QUESTIONS.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    onClick={() => askRag(q)}
+                    className="text-xs px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-full hover:bg-gray-50 hover:border-gray-400 transition-colors"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -213,6 +303,135 @@ export default function AssistantChat({
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+// === AdvisorCard ============================================================
+
+function AdvisorCard({ data }: { data: AdvisorResponse }) {
+  const verdictMeta: Record<
+    AdvisorResponse['verdict'],
+    { label: string; color: string; bg: string; border: string }
+  > = {
+    eligible: {
+      label: 'มีโอกาสผ่านเกณฑ์',
+      color: 'text-green-700',
+      bg: 'bg-green-50',
+      border: 'border-green-200',
+    },
+    partially_eligible: {
+      label: 'ผ่านบางส่วน',
+      color: 'text-amber-700',
+      bg: 'bg-amber-50',
+      border: 'border-amber-200',
+    },
+    ineligible: {
+      label: 'ยังไม่ผ่านเกณฑ์',
+      color: 'text-red-700',
+      bg: 'bg-red-50',
+      border: 'border-red-200',
+    },
+    needs_more_info: {
+      label: 'ต้องการข้อมูลเพิ่มเติม',
+      color: 'text-gray-700',
+      bg: 'bg-gray-50',
+      border: 'border-gray-200',
+    },
+  };
+  const meta = verdictMeta[data.verdict] || verdictMeta.needs_more_info;
+
+  const statusBadge: Record<
+    AdvisorResponse['requirement_checks'][number]['status'],
+    { label: string; cls: string }
+  > = {
+    pass: { label: 'ผ่าน', cls: 'bg-green-100 text-green-800' },
+    fail: { label: 'ไม่ผ่าน', cls: 'bg-red-100 text-red-800' },
+    unknown: { label: 'ไม่ทราบ', cls: 'bg-gray-100 text-gray-700' },
+    not_applicable: { label: 'ไม่เกี่ยว', cls: 'bg-gray-100 text-gray-500' },
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Verdict header */}
+      <div className={`p-3 rounded-md border ${meta.bg} ${meta.border}`}>
+        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+          ผลการวิเคราะห์
+        </p>
+        <p className={`text-base font-bold ${meta.color}`}>{meta.label}</p>
+        <p className="text-sm text-gray-700 mt-1 leading-relaxed">
+          {data.verdict_summary}
+        </p>
+      </div>
+
+      {/* Requirement checks */}
+      {data.requirement_checks.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-700 mb-2">
+            เงื่อนไขที่ตรวจสอบ ({data.requirement_checks.length} ข้อ)
+          </p>
+          <div className="space-y-2">
+            {data.requirement_checks.map((c, i) => {
+              const badge = statusBadge[c.status] || statusBadge.unknown;
+              return (
+                <div
+                  key={i}
+                  className="text-xs p-2.5 bg-gray-50 rounded border border-gray-200"
+                >
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <span className="font-semibold text-gray-900 flex-1">
+                      {c.requirement}
+                    </span>
+                    <span
+                      className={`shrink-0 px-2 py-0.5 rounded text-[10px] font-semibold ${badge.cls}`}
+                    >
+                      {badge.label}
+                    </span>
+                  </div>
+                  <p className="text-gray-600">
+                    <span className="text-gray-500">ค่าของคุณ:</span>{' '}
+                    <span className="font-medium">{c.user_value}</span>
+                  </p>
+                  {c.explanation && (
+                    <p className="text-gray-500 mt-1 leading-relaxed">{c.explanation}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Recommended actions */}
+      {data.recommended_actions.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-700 mb-2">
+            แนะนำให้ทำ
+          </p>
+          <ol className="text-xs text-gray-700 space-y-1 list-decimal list-inside">
+            {data.recommended_actions.map((a, i) => (
+              <li key={i} className="leading-relaxed">
+                {a}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* Sources */}
+      {data.sources.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
+            อ้างอิง
+          </p>
+          <p className="text-[11px] text-gray-500 leading-relaxed">
+            {data.sources
+              .slice(0, 4)
+              .map((s, i) => `[${i + 1}] ${s.title || 'ไม่ระบุ'}`)
+              .join('  ·  ')}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

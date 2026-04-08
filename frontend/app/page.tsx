@@ -5,7 +5,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { CreditInput, ChecklistItem } from '@/types/credit';
-import { predictCredit, PredictResponse } from '@/utils/api';
+import { predictCredit, PredictResponse, AdvisorProfile } from '@/utils/api';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import CreditForm from '@/components/CreditForm';
@@ -73,6 +73,35 @@ function buildChecklist(actions: string[]): ChecklistItem[] {
   }));
 }
 
+/**
+ * Convert raw form input into the advisor profile schema (numeric fields).
+ * Empty strings become undefined so the LLM treats them as "not specified".
+ */
+function buildAdvisorProfile(data: CreditInput): AdvisorProfile {
+  const num = (s: string): number | undefined => {
+    if (!s) return undefined;
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const int = (s: string): number | undefined => {
+    if (!s) return undefined;
+    const n = parseInt(s, 10);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  return {
+    salary_per_month: num(data.Salary),
+    occupation: data.Occupation || undefined,
+    marriage_status: data.Marital_status || undefined,
+    has_coapplicant: data.Coapplicant ? data.Coapplicant === 'Yes' : undefined,
+    credit_score: int(data.credit_score),
+    credit_grade: data.credit_grade || undefined,
+    outstanding_debt: num(data.outstanding),
+    overdue_amount: num(data.overdue),
+    loan_amount_requested: num(data.loan_amount),
+    interest_rate: num(data.Interest_rate),
+  };
+}
+
 function buildProfileSummary(data: CreditInput, prediction: PredictResponse): string {
   const decisionTh = prediction.prediction === 1 ? 'น่าจะอนุมัติ' : 'น่าจะถูกปฏิเสธ';
   return [
@@ -97,6 +126,7 @@ export default function Home() {
   const [plannerError, setPlannerError] = useState<string | null>(null);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [userProfileSummary, setUserProfileSummary] = useState<string>('');
+  const [advisorProfile, setAdvisorProfile] = useState<AdvisorProfile | null>(null);
 
   const {
     register,
@@ -147,6 +177,7 @@ export default function Home() {
       setPlannerError(prediction.planner_error || null);
       setChecklist(buildChecklist(actions));
       setUserProfileSummary(buildProfileSummary(data, prediction));
+      setAdvisorProfile(buildAdvisorProfile(data));
     } catch (error) {
       console.error('Error calculating credit score:', error);
       const detail =
@@ -257,7 +288,10 @@ export default function Home() {
               />
 
               <div className="mt-6">
-                <AssistantChat userProfileSummary={userProfileSummary} />
+                <AssistantChat
+                  userProfileSummary={userProfileSummary}
+                  advisorProfile={advisorProfile || undefined}
+                />
               </div>
             </div>
           )}
