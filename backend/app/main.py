@@ -135,14 +135,37 @@ def _normalize_credit_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _extract_approve_confidence(prediction_result: Dict[str, Any], shap_result: Dict[str, Any]) -> float:
+    """
+    Extract P(approve) from LGBM prediction.
+
+    IMPORTANT label convention:
+    - LGBM was trained with class 1 = DEFAULT (bad borrower), class 0 = PAID (good borrower)
+    - That is the standard Kaggle "Give Me Some Credit" convention.
+    - Therefore `probabilities["1"]` = P(default), and we must INVERT it to get
+      P(approve) = 1 - P(default).
+    - Prior to this fix the code returned P(default) as "approve confidence",
+      which produced a fully inverted decision surface (good profiles → reject,
+      bad profiles → approve with 82% confidence).
+    """
     probabilities = prediction_result.get("probabilities")
     if isinstance(probabilities, dict):
-        approve_raw = probabilities.get("1")
-        if approve_raw is None:
-            approve_raw = probabilities.get(1)
-        if approve_raw is not None:
+        # Prefer explicit P(paid) = probabilities["0"]
+        paid_raw = probabilities.get("0")
+        if paid_raw is None:
+            paid_raw = probabilities.get(0)
+        if paid_raw is not None:
             try:
-                return max(0.0, min(1.0, float(approve_raw)))
+                return max(0.0, min(1.0, float(paid_raw)))
+            except (TypeError, ValueError):
+                pass
+
+        # Fallback: invert P(default)
+        default_raw = probabilities.get("1")
+        if default_raw is None:
+            default_raw = probabilities.get(1)
+        if default_raw is not None:
+            try:
+                return max(0.0, min(1.0, 1.0 - float(default_raw)))
             except (TypeError, ValueError):
                 pass
 
@@ -174,16 +197,36 @@ def _build_external_plan_payload(
     prediction_result: Dict[str, Any],
     shap_result: Dict[str, Any],
 ) -> Dict[str, Any]:
-    probabilities = prediction_result.get("probabilities", {}) or {}
-    p0 = _to_float(probabilities.get("0", probabilities.get(0)), 0.0)
-    p1 = _to_float(probabilities.get("1", probabilities.get(1)), 0.0)
-    if p0 == 0.0 and p1 == 0.0:
-        pred = _to_int(prediction_result.get("prediction"), 0)
-        p1 = 1.0 if pred == 1 else 0.0
-        p0 = 1.0 - p1
+    """
+    Build payload for planner /plan/external.
 
+    IMPORTANT: LGBM classes are {0: paid, 1: default}.
+    Planner expects {0: reject, 1: approve}, so we SWAP:
+      model_output.probabilities["1"] = P(paid)   = P(approve)
+      model_output.probabilities["0"] = P(default) = P(reject)
+      model_output.prediction         = 1 - raw_prediction
+    SHAP values must also be NEGATED so that positive = helps approval.
+    """
+    probabilities = prediction_result.get("probabilities", {}) or {}
+    # LGBM convention: key "0" = P(paid), key "1" = P(default)
+    p_paid = _to_float(probabilities.get("0", probabilities.get(0)), 0.0) or 0.0
+    p_default = _to_float(probabilities.get("1", probabilities.get(1)), 0.0) or 0.0
+    if p_paid == 0.0 and p_default == 0.0:
+        raw_pred = _to_int(prediction_result.get("prediction"), 0)
+        p_default = 1.0 if raw_pred == 1 else 0.0
+        p_paid = 1.0 - p_default
+
+    # Planner semantic: probabilities["1"] = P(approve), ["0"] = P(reject)
+    p_approve = p_paid
+    p_reject = p_default
+
+    # Invert prediction: LGBM 1 (default) → planner 0 (reject); LGBM 0 (paid) → planner 1 (approve)
+    raw_prediction = _to_int(prediction_result.get("prediction"), 0)
+    inverted_prediction = 1 - raw_prediction if raw_prediction in (0, 1) else 0
+
+    # SHAP was computed on class=1 (default). Negate so positive = helps approval.
     shap_values = shap_result.get("shap_values", {}) or {}
-    shap_payload = {str(k): float(v) for k, v in shap_values.items()}
+    shap_payload = {str(k): -float(v) for k, v in shap_values.items()}
 
     return {
         "request_id": f"bridge-{uuid4().hex[:12]}",
@@ -201,10 +244,10 @@ def _build_external_plan_payload(
             "Interest_rate": float(data["Interest_rate"]),
         },
         "model_output": {
-            "prediction": int(_to_int(prediction_result.get("prediction"), 0)),
+            "prediction": inverted_prediction,
             "probabilities": {
-                "0": round(float(p0), 6),
-                "1": round(float(p1), 6),
+                "0": round(float(p_reject), 6),
+                "1": round(float(p_approve), 6),
             },
         },
         "shap_json": {
@@ -302,11 +345,32 @@ async def predict(payload: Dict[str, Any]) -> Dict[str, Any]:
         prediction_result = predict_module.run_prediction(data, MODEL)
         shap_result = explain_module.compute_shap(data, MODEL, EXPLAINER)
 
-        prediction = _to_int(prediction_result.get("prediction"), 0)
+        # ── Label inversion ──────────────────────────────────────────────
+        # LGBM classes: {0: paid/good, 1: default/bad}
+        # Frontend expects: {0: rejected, 1: approved}
+        # Invert prediction + confidence + SHAP so the whole response is
+        # expressed in "approval-oriented" semantics.
+        raw_prediction = _to_int(prediction_result.get("prediction"), 0)
+        prediction = 1 - raw_prediction if raw_prediction in (0, 1) else 0
         confidence = _extract_approve_confidence(prediction_result, shap_result)
-        shap_values = shap_result.get("shap_values", {}) or {}
+
+        # Negate SHAP so positive = helps approval (matches frontend display)
+        raw_shap = shap_result.get("shap_values", {}) or {}
+        shap_values = {k: -float(v) for k, v in raw_shap.items()}
+
+        # Probabilities exposed to frontend also in approval-oriented form
+        raw_probs = prediction_result.get("probabilities", {}) or {}
+        p_paid = _to_float(raw_probs.get("0", raw_probs.get(0)), 0.0) or 0.0
+        p_default = _to_float(raw_probs.get("1", raw_probs.get(1)), 0.0) or 0.0
+        approval_probabilities = {
+            "0": round(p_default, 6),  # P(reject) = P(default)
+            "1": round(p_paid, 6),      # P(approve) = P(paid)
+        }
+
         model_explanation = _build_fallback_explanation(prediction, confidence, shap_values)
 
+        # Planner payload is built from the ORIGINAL prediction_result;
+        # _build_external_plan_payload handles the inversion internally.
         external_plan_payload = _build_external_plan_payload(data, prediction_result, shap_result)
         planner_result, planner_error = await _request_ollama_planner(external_plan_payload)
 
@@ -325,7 +389,7 @@ async def predict(payload: Dict[str, Any]) -> Dict[str, Any]:
             "explanation": model_explanation,
             "model_explanation": model_explanation,
             "planner_explanation": planner_explanation,
-            "probabilities": prediction_result.get("probabilities", {}),
+            "probabilities": approval_probabilities,
             "explanation_details": shap_result,
             "planner": planner_result,
             "planner_error": planner_error,

@@ -7,19 +7,6 @@
   - Environments: .env.local
 
  ✓ Starting...
- ✓ Ready in 2.4s
- ✓ Compiled /api/health in 181ms (56 modules)
- GET /api/health 200 in 741ms
- ○ Compiling / ...
- ✓ Compiled / in 2.6s (531 modules)
- GET / 200 in 2912ms
- ✓ Compiled in 293ms (258 modules)
- ✓ Compiled /api/predict in 202ms (275 modules)
- POST /api/predict 200 in 59328ms
- ✓ Compiled in 785ms (501 modules)
- ✓ Compiled in 535ms (501 modules)
- ✓ Compiled in 483ms (501 modules)
- ✓ Compiled in 543ms (501 modules)
- ✓ Compiled in 519ms (501 modules)
- ✓ Compiled in 521ms (501 modules)
- ✓ Compiled in 480ms (501 modules)
+ ✓ Ready in 1856ms
+ ✓ Compiled /api/health in 99ms (56 modules)
+ GET /api/health 200 in 396ms

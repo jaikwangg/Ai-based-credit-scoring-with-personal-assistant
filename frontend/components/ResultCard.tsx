@@ -91,28 +91,23 @@ export default function ResultCard({
           onClick={onBack}
           className="text-sm text-gray-600 hover:text-gray-900 font-medium"
         >
-          {'<'} กลับไปกรอกข้อมูล
+          กลับไปกรอกข้อมูล
         </button>
       )}
 
       {modelContradicted && (
-        <div className="bg-orange-50 border-l-4 border-orange-400 rounded-lg p-4">
-          <div className="flex items-start">
-            <span className="text-orange-500 text-xl mr-3">⚠</span>
-            <div className="flex-1">
-              <p className="font-semibold text-orange-900">
-                คำเตือน: ผลโมเดลอาจไม่สอดคล้องกับโปรไฟล์จริง
-              </p>
-              <p className="text-sm text-orange-800 mt-1">
-                แม้โมเดลประเมินว่ามีแนวโน้มอนุมัติ ({pct}%) แต่ตัวชี้วัดทางการเงิน
-                {dti >= 1 && ` DTI สูงมาก (${(dti * 100).toFixed(0)}%)`}
-                {lti >= 40 && ` LTI สูงมาก (${lti.toFixed(0)} เท่าของรายได้)`}
-                {creditScoreNum > 0 && creditScoreNum < 500 && ` คะแนนเครดิตต่ำ (${creditScoreNum})`}
-                {' '}อยู่นอกช่วงที่สถาบันการเงินจริงจะพิจารณาอนุมัติได้ — โปรดตรวจสอบข้อมูลที่กรอก
-                หรืออ่านคำแนะนำจาก AI ด้านล่างอย่างละเอียด
-              </p>
-            </div>
-          </div>
+        <div className="bg-amber-50 border-l-4 border-amber-500 rounded p-4">
+          <p className="font-semibold text-amber-900">
+            คำเตือน: ผลโมเดลอาจไม่สอดคล้องกับโปรไฟล์จริง
+          </p>
+          <p className="text-sm text-amber-800 mt-1 leading-relaxed">
+            แม้โมเดลประเมินว่ามีแนวโน้มอนุมัติ ({pct}%) แต่ตัวชี้วัดทางการเงิน
+            {dti >= 1 && ` DTI สูงมาก (${(dti * 100).toFixed(0)}%)`}
+            {lti >= 40 && ` LTI สูงมาก (${lti.toFixed(0)} เท่าของรายได้)`}
+            {creditScoreNum > 0 && creditScoreNum < 500 && ` คะแนนเครดิตต่ำ (${creditScoreNum})`}
+            {' '}อยู่นอกช่วงที่สถาบันการเงินจริงจะพิจารณาอนุมัติได้
+            โปรดตรวจสอบข้อมูลที่กรอกหรืออ่านคำแนะนำจาก AI ด้านล่างอย่างละเอียด
+          </p>
         </div>
       )}
 
@@ -142,11 +137,11 @@ export default function ResultCard({
               </p>
             </div>
             <div
-              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-bold tracking-wide ${
+              className={`shrink-0 px-3 py-1.5 rounded-md text-xs font-semibold tracking-wide ${
                 approved ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
               }`}
             >
-              {approved ? '✓ APPROVED' : '✗ DECLINED'}
+              {approved ? 'APPROVED' : 'DECLINED'}
             </div>
           </div>
 
@@ -251,11 +246,8 @@ export default function ResultCard({
       {/* ── SHAP Drivers: Positive / Negative ────────────────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-white rounded-2xl shadow-sm p-6 border border-green-100">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-green-700 flex items-center">
-              <span className="w-7 h-7 rounded-full bg-green-100 text-green-700 flex items-center justify-center mr-2 text-sm">
-                ✓
-              </span>
+          <div className="flex items-center justify-between mb-4 pb-3 border-b border-green-100">
+            <h3 className="text-base font-semibold text-green-700">
               ปัจจัยบวก
             </h3>
             <span className="text-xs text-gray-500">ช่วยเพิ่มโอกาสอนุมัติ</span>
@@ -278,11 +270,8 @@ export default function ResultCard({
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm p-6 border border-red-100">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-red-700 flex items-center">
-              <span className="w-7 h-7 rounded-full bg-red-100 text-red-700 flex items-center justify-center mr-2 text-sm">
-                ✗
-              </span>
+          <div className="flex items-center justify-between mb-4 pb-3 border-b border-red-100">
+            <h3 className="text-base font-semibold text-red-700">
               ปัจจัยลบ
             </h3>
             <span className="text-xs text-gray-500">ลดโอกาสอนุมัติ</span>
@@ -306,21 +295,23 @@ export default function ResultCard({
 
       {/* ── Preview of AI guidance ─────────────────────────────────── */}
       {plannerExplanation && (
-        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-6 border border-blue-100">
-          <div className="flex items-center mb-3">
-            <span className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center mr-3 text-sm">
-              AI
+        <div className="bg-white rounded-2xl p-6 border border-gray-200">
+          <div className="flex items-baseline justify-between mb-3 pb-3 border-b border-gray-200">
+            <h3 className="text-base font-semibold text-gray-900">
+              สรุปคำแนะนำจากระบบ
+            </h3>
+            <span className="text-[11px] text-gray-500 uppercase tracking-wide">
+              Preview
             </span>
-            <h3 className="text-lg font-semibold text-gray-900">สรุปคำแนะนำจาก AI</h3>
           </div>
-          <p className="text-gray-800 whitespace-pre-wrap leading-relaxed text-sm line-clamp-4">
-            {plannerExplanation}
+          <p className="text-sm text-gray-700 leading-relaxed line-clamp-5">
+            {stripMarkdown(plannerExplanation)}
           </p>
           <button
             onClick={onTalkToAssistant}
-            className="mt-3 text-sm font-semibold text-blue-700 hover:text-blue-900"
+            className="mt-4 text-sm font-semibold text-gray-900 underline underline-offset-2 hover:text-black"
           >
-            ดูคำแนะนำเต็ม + แหล่งอ้างอิง →
+            อ่านรายงานฉบับเต็มและแหล่งอ้างอิง
           </button>
         </div>
       )}
@@ -339,19 +330,32 @@ export default function ResultCard({
 
       {plannerError && (
         <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-xl text-sm text-yellow-900">
-          <span className="font-semibold">⚠ Planner status:</span> {plannerError}
+          <span className="font-semibold">หมายเหตุระบบ:</span> {plannerError}
         </div>
       )}
 
       {/* ── CTA ──────────────────────────────────────────────────── */}
       <button
         onClick={onTalkToAssistant}
-        className="w-full bg-primary-600 hover:bg-primary-700 text-white py-4 px-6 rounded-xl font-semibold text-lg shadow-md hover:shadow-lg transition-all"
+        className="w-full bg-gray-900 hover:bg-black text-white py-4 px-6 rounded-xl font-semibold text-base shadow-sm hover:shadow-md transition-all"
       >
-        คุยกับ AI Personal Assistant →
+        ดูรายงานฉบับเต็มและสอบถามข้อมูลเพิ่มเติม
       </button>
     </div>
   );
+}
+
+/**
+ * Strip markdown (bold, italic, asterisks) for plain-text preview/snippets.
+ */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/^#+\s*/gm, '')
+    .replace(/^\s*\*\s+/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function MetricCard({

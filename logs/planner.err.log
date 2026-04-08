@@ -1,31 +1,4 @@
-INFO:     Started server process [29912]
+INFO:     Started server process [7092]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
-2026-04-08 03:40:37,817 - src.api.routes.scoring - INFO - External plan request: bridge-ca5a0739e63c
-C:\Users\Kanna\AppData\Local\Programs\Python\Python312\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.2.2) or chardet (7.4.0.post2)/charset_normalizer (3.3.2) doesn't match a supported version!
-  warnings.warn(
-C:\Users\Kanna\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\utils\_pytree.py:185: FutureWarning: optree is installed but the version is too old to support PyTorch Dynamo in C++ pytree. C++ pytree support is disabled. Please consider upgrading optree using `python3 -m pip install --upgrade 'optree>=0.13.0'`.
-  warnings.warn(
-WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-I0000 00:00:1775594449.757550    5920 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
-WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-I0000 00:00:1775594452.418197    5920 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
-2026-04-08 03:40:53,935 - datasets - INFO - PyTorch version 2.6.0 available.
-2026-04-08 03:40:53,939 - datasets - INFO - TensorFlow version 2.21.0 available.
-2026-04-08 03:41:01,875 - tensorflow - WARNING - From C:\Users\Kanna\AppData\Local\Programs\Python\Python312\Lib\site-packages\tf_keras\src\losses.py:2976: The name tf.losses.sparse_softmax_cross_entropy is deprecated. Please use tf.compat.v1.losses.sparse_softmax_cross_entropy instead.
-
-2026-04-08 03:41:03,232 - sentence_transformers.SentenceTransformer - INFO - Load pretrained SentenceTransformer: BAAI/bge-m3
-2026-04-08 03:41:10,084 - src.query_engine - INFO - LLM provider: Gemini/GoogleGenAI (model=gemini-2.5-flash)
-2026-04-08 03:41:11,418 - httpx - INFO - HTTP Request: GET https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash "HTTP/1.1 200 OK"
-2026-04-08 03:41:11,420 - src.planner.rag_bridge - INFO - RAG manager initialised (collection=cimb_loans_bge_m3)
-2026-04-08 03:41:11,422 - src.query_engine - INFO - Querying: \u0e40\u0e2d\u0e01\u0e2a\u0e32\u0e23\u0e17\u0e35\u0e48\u0e15\u0e49\u0e2d\u0e07\u0e43\u0e0a\u0e49\u0e2a\u0e21\u0e31\u0e04\u0e23\u0e2a\u0e34\u0e19\u0e40\u0e0a\u0e37\u0e48\u0e2d\u0e1a\u0e49\u0e32\u0e19\u0e21\u0e35\u0e2d\u0e30\u0e44\u0e23\u0e1a\u0e49\u0e32\u0e07 (route=policy_requirement)
-2026-04-08 03:41:11,423 - src.query_engine - INFO - Creating query engine with top_k=20, mode=compact, route=policy_requirement
-2026-04-08 03:41:11,993 - google_genai.models - INFO - AFC is enabled with max remote calls: 10.
-2026-04-08 03:41:15,886 - httpx - INFO - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
-2026-04-08 03:41:15,892 - src.query_engine - INFO - Querying: \u0e15\u0e49\u0e2d\u0e07\u0e21\u0e35\u0e04\u0e38\u0e13\u0e2a\u0e21\u0e1a\u0e31\u0e15\u0e34\u0e2d\u0e22\u0e48\u0e32\u0e07\u0e44\u0e23\u0e16\u0e36\u0e07\u0e08\u0e30\u0e01\u0e39\u0e49\u0e1a\u0e49\u0e32\u0e19\u0e44\u0e14\u0e49 (route=policy_requirement)
-2026-04-08 03:41:15,892 - src.query_engine - INFO - Creating query engine with top_k=20, mode=compact, route=policy_requirement
-2026-04-08 03:41:16,128 - google_genai.models - INFO - AFC is enabled with max remote calls: 10.
-2026-04-08 03:41:23,548 - httpx - INFO - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
-2026-04-08 03:41:23,555 - google_genai.models - INFO - AFC is enabled with max remote calls: 10.
-2026-04-08 03:41:35,970 - httpx - INFO - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"

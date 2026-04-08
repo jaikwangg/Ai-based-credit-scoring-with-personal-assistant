@@ -15,17 +15,17 @@ import AssistantChat from '@/components/AssistantChat';
 
 // Validation schema
 const creditSchema = z.object({
-  Sex: z.string().min(1, 'Sex is required'),
-  Occupation: z.string().min(1, 'Occupation is required'),
-  Salary: z.string().min(1, 'Salary is required').regex(/^\d+(\.\d{1,2})?$/, 'Please enter a valid number'),
-  Marital_status: z.string().min(1, 'Marital status is required'),
-  credit_score: z.string().regex(/^\d*$/, 'Please enter a valid score').optional().or(z.literal('')),
+  Sex: z.string().min(1, 'กรุณาเลือกเพศ'),
+  Occupation: z.string().min(1, 'กรุณาเลือกอาชีพ'),
+  Salary: z.string().min(1, 'กรุณาระบุรายได้').regex(/^\d+(\.\d{1,2})?$/, 'กรุณากรอกตัวเลขให้ถูกต้อง'),
+  Marital_status: z.string().min(1, 'กรุณาเลือกสถานภาพสมรส'),
+  credit_score: z.string().regex(/^\d*$/, 'กรุณากรอกคะแนนที่ถูกต้อง').optional().or(z.literal('')),
   credit_grade: z.string().optional(),
-  outstanding: z.string().min(1, 'Outstanding debt is required').regex(/^\d+(\.\d{1,2})?$/, 'Please enter a valid number'),
-  overdue: z.string().min(1, 'Overdue amount is required').regex(/^\d+(\.\d{1,2})?$/, 'Please enter a valid number'),
-  loan_amount: z.string().min(1, 'Loan amount is required').regex(/^\d+(\.\d{1,2})?$/, 'Please enter a valid number'),
-  Coapplicant: z.string().min(1, 'Co-applicant status is required'),
-  Interest_rate: z.string().min(1, 'Interest rate is required').regex(/^\d+(\.\d{1,2})?$/, 'Please enter a valid percentage'),
+  outstanding: z.string().min(1, 'กรุณาระบุหนี้คงค้าง').regex(/^\d+(\.\d{1,2})?$/, 'กรุณากรอกตัวเลขให้ถูกต้อง'),
+  overdue: z.string().min(1, 'กรุณาระบุยอดค้างชำระ').regex(/^\d+(\.\d{1,2})?$/, 'กรุณากรอกตัวเลขให้ถูกต้อง'),
+  loan_amount: z.string().min(1, 'กรุณาระบุวงเงินขอกู้').regex(/^\d+(\.\d{1,2})?$/, 'กรุณากรอกตัวเลขให้ถูกต้อง'),
+  Coapplicant: z.string().min(1, 'กรุณาเลือกสถานะผู้กู้ร่วม'),
+  Interest_rate: z.string().min(1, 'กรุณาระบุอัตราดอกเบี้ย').regex(/^\d+(\.\d{1,2})?$/, 'กรุณากรอกเปอร์เซ็นต์ให้ถูกต้อง'),
 });
 
 type View = 'form' | 'result' | 'assistant';
@@ -36,79 +36,33 @@ type View = 'form' | 'result' | 'assistant';
  * Thai numerals ๑., or section heads like "มาตรการ:". Accept all of them.
  */
 /**
- * Strip markdown formatting from a line (bold, italic, headers).
- */
-function stripMarkdown(line: string): string {
-  return line
-    .replace(/^#+\s*/, '') // headers
-    .replace(/\*\*(.+?)\*\*/g, '$1') // bold
-    .replace(/\*(.+?)\*/g, '$1') // italic
-    .replace(/^\*\*+|\*\*+$/g, '') // unclosed bold
-    .trim();
-}
-
-/**
- * Decide whether a line is an actual action item vs a section header, label,
- * probability readout, or prose. Planner (Gemini) wraps section titles in
- * `**...**` and uses numbered headings like "1. สรุปผล" which are NOT tasks.
- */
-function isActionable(raw: string): boolean {
-  const line = raw.trim();
-  if (line.length < 10) return false; // too short to be a real task
-  if (line.length > 300) return false; // too long — probably a paragraph
-
-  // Section headers (Gemini wraps them in bold)
-  if (/^\*\*[^*]+\*\*:?$/.test(line)) return false;
-  // Numbered section titles like "1. สรุปผลการวิเคราะห์" or "มาตรการที่ 1:"
-  if (/^(\*\*)?\d+[.)、]\s*(สรุป|ผลการ|รายการ|ข้อสังเกต|ข้อเสนอแนะ|ข้อจำกัด|หมายเหตุ|เกี่ยวกับ|บทนำ|รายงาน)/.test(line))
-    return false;
-  if (/^(\*\*)?มาตรการที่\s*\d+/.test(line)) return false;
-  // Probability/metadata
-  if (/^P\(.*\)\s*=/i.test(line)) return false;
-  if (/^(สรุป|ผลการ|หมายเหตุ|รายการเอกสาร|รายงาน|ข้อจำกัด|ข้อสังเกต|ข้อเสนอแนะ)/.test(line))
-    return false;
-  if (/^(disclaimer|note|summary|report)/i.test(line)) return false;
-  // RAG miss sentinel
-  if (/ไม่พบข้อมูลในเอกสาร/.test(line)) return false;
-  // Pure label line ending with colon, no real content
-  if (/^[^:]{1,40}:\s*$/.test(line)) return false;
-
-  return true;
-}
-
-/**
- * Extract actionable bullet lines from the planner's Thai text.
- * Accepts numbered/dashed/dotted bullets, ignores markdown headers and prose.
+ * Extract action titles from the planner's Gemini-generated Thai report.
+ *
+ * Gemini wraps each action with a consistent header like:
+ *   **มาตรการที่ 1: ฟื้นฟูวินัยเครดิตอย่างต่อเนื่อง**
+ *   **มาตรการที่ 2: ทบทวนความพร้อมทางการเงินก่อนยื่นใหม่**
+ *
+ * We pull only those titles. Everything else in the report (profile data,
+ * SHAP values, probabilities, paragraphs under each measure) is NOT an action.
+ *
+ * Returns an empty array if no `มาตรการที่` headers are found — the caller
+ * should then hide the checklist entirely rather than show garbage bullets.
  */
 function extractActionsFromText(text?: string): string[] {
   if (!text) return [];
 
-  const bulletPattern =
-    /^(?:\d+[.)、]|[๑๒๓๔๕๖๗๘๙๐]+[.)])\s+|^[-*•▪●]\s+|^(?:มาตรการ|ข้อเสนอแนะ|แนวทาง|ขั้นตอน)[:：]\s*/;
-
-  const rawLines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-
-  // Pass 1: bullets that are truly actionable
-  const bulletLines: string[] = [];
-  for (const raw of rawLines) {
-    const stripped = stripMarkdown(raw);
-    if (!bulletPattern.test(stripped)) continue;
-    const body = stripped.replace(bulletPattern, '').trim();
-    // Body itself must be actionable (not a header-like label)
-    if (!isActionable(body)) continue;
-    // Clip verbose bullets at the first sentence boundary for readability
-    const firstSentence = body.split(/(?<=[。.!?])\s+/)[0];
-    bulletLines.push(firstSentence.length > 30 ? firstSentence : body);
+  const measurePattern = /\*\*\s*มาตรการที่\s*\d+\s*[:：]\s*([^*]+?)\s*\*\*/g;
+  const titles: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = measurePattern.exec(text)) !== null) {
+    const title = match[1]
+      .trim()
+      .replace(/\s{2,}/g, ' ')
+      .replace(/[*]+$/, '');
+    if (title) titles.push(title);
   }
 
-  if (bulletLines.length > 0) return Array.from(new Set(bulletLines)).slice(0, 6);
-
-  // Pass 2: sentence fallback — split by sentence boundary, keep actionable ones
-  const sentences = rawLines
-    .flatMap((line) => stripMarkdown(line).split(/(?<=[。.!?])\s+/))
-    .map((s) => s.trim())
-    .filter((s) => isActionable(s));
-  return Array.from(new Set(sentences)).slice(0, 5);
+  return Array.from(new Set(titles)).slice(0, 6);
 }
 
 function buildChecklist(actions: string[]): ChecklistItem[] {
@@ -198,7 +152,7 @@ export default function Home() {
       const detail =
         error instanceof Error && error.message
           ? error.message
-          : 'Failed to calculate credit score. Please check that the backend is running and try again.';
+          : 'ไม่สามารถประเมินได้ กรุณาตรวจสอบว่า backend ทำงานอยู่แล้วลองใหม่อีกครั้ง';
       alert(detail);
       setView('form');
     } finally {
@@ -239,14 +193,14 @@ export default function Home() {
                       disabled={isCalculating}
                       className="w-full bg-primary-600 text-white py-4 px-6 rounded-lg font-semibold text-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-md"
                     >
-                      Calculate Credit Score
+                      ประเมินคะแนนเครดิต
                     </button>
                   </div>
                 </form>
 
                 {!isValid && (
                   <p className="mt-3 text-sm text-gray-500">
-                    Please complete all required fields before submitting.
+                    กรุณากรอกข้อมูลที่จำเป็นให้ครบก่อนส่งแบบฟอร์ม
                   </p>
                 )}
               </div>
