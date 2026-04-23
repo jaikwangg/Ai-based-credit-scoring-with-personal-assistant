@@ -10,6 +10,7 @@ interface ResultCardProps {
   plannerExplanation?: string;
   plannerError?: string | null;
   userInput: CreditInput;
+  distributionWarnings?: string[];
   onTalkToAssistant: () => void;
   onBack?: () => void;
 }
@@ -21,8 +22,8 @@ const FEATURE_LABELS_TH: Record<string, string> = {
   Marriage_Status: 'สถานภาพสมรส',
   credit_score: 'คะแนนเครดิต',
   credit_grade: 'เกรดเครดิต',
-  outstanding: 'หนี้คงค้าง',
-  overdue: 'ยอดค้างชำระ',
+  outstanding: 'ภาระหนี้สินรวม',
+  overdue: 'จำนวนวันค้างชำระสูงสุด',
   Coapplicant: 'ผู้กู้ร่วม',
   loan_amount: 'วงเงินขอกู้',
   loan_term: 'ระยะเวลากู้',
@@ -46,6 +47,7 @@ export default function ResultCard({
   plannerExplanation,
   plannerError,
   userInput,
+  distributionWarnings = [],
   onTalkToAssistant,
   onBack,
 }: ResultCardProps) {
@@ -93,6 +95,22 @@ export default function ResultCard({
         >
           กลับไปกรอกข้อมูล
         </button>
+      )}
+
+      {distributionWarnings.length > 0 && (
+        <div className="bg-yellow-50 border-l-4 border-yellow-500 rounded p-4">
+          <p className="font-semibold text-yellow-900">
+            ⓘ ข้อมูลบางส่วนอยู่นอกช่วงที่โมเดลเรียนรู้
+          </p>
+          <p className="text-xs text-yellow-800 mt-1 mb-2">
+            ผลการประเมินด้านล่างอาจไม่แม่นยำ — โมเดลถูก train บน dataset ที่มีช่วงค่าจำกัด:
+          </p>
+          <ul className="text-xs text-yellow-800 space-y-0.5 list-disc list-inside">
+            {distributionWarnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {modelContradicted && (

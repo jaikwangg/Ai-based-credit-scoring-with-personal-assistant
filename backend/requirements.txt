@@ -29,3 +29,23 @@ tzdata==2025.3
 uvicorn==0.41.0
 watchfiles==1.1.1
 websockets==16.0
+
+# RAG dependencies (merged from Ai-Credit-Scoring)
+nest-asyncio
+llama-index-core>=0.14.0
+llama-index-llms-openai
+llama-index-llms-ollama
+llama-index-embeddings-openai
+llama-index-embeddings-huggingface
+llama-index-vector-stores-faiss
+llama-index-vector-stores-chroma
+openai
+tiktoken
+ollama==0.6.1
+chromadb
+faiss-cpu==1.8.0
+PyPDF2==3.0.1
+python-docx==1.1.0
+openpyxl==3.1.2
+sqlalchemy>=2.0,<3
+llama-index-llms-google-genai

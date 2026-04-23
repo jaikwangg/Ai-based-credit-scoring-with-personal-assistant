@@ -7,6 +7,23 @@
   - Environments: .env.local
 
  ✓ Starting...
- ✓ Ready in 1531ms
- ✓ Compiled /api/health in 92ms (56 modules)
- GET /api/health 200 in 385ms
+ ✓ Ready in 2.1s
+ ✓ Compiled /api/health in 99ms (56 modules)
+ GET /api/health 200 in 404ms
+ ○ Compiling / ...
+ ✓ Compiled / in 2s (503 modules)
+ GET / 200 in 2327ms
+ ✓ Compiled in 230ms (259 modules)
+ ✓ Compiled /api/predict in 169ms (274 modules)
+ POST /api/predict 200 in 11745ms
+ GET / 200 in 117ms
+ GET /?Sex=Male&Marital_status=Married&Occupation=Professional_Specialist&Salary=30000&credit_score=800&credit_grade=BB&outstanding=100000&overdue=0&loan_amount=2000000&loan_term=27&Interest_rate=5.75&Coapplicant=Yes 200 in 43ms
+ GET /?Sex=Male&Marital_status=Married&Occupation=Professional_Specialist&Salary=30000&credit_score=800&credit_grade=BB&outstanding=100000&overdue=0&loan_amount=2000000&loan_term=27&Interest_rate=5.75&Coapplicant=Yes 200 in 64ms
+ GET /?Sex=Male&Marital_status=Married&Occupation=Professional_Specialist&Salary=30000&credit_score=800&credit_grade=BB&outstanding=100000&overdue=0&loan_amount=2000000&loan_term=27&Interest_rate=5.75&Coapplicant=Yes 200 in 27ms
+ GET / 200 in 47ms
+ GET / 200 in 62ms
+ POST /api/predict 200 in 3072ms
+ ✓ Compiled /api/rag/advisor in 252ms (276 modules)
+ POST /api/rag/advisor 200 in 7647ms
+ POST /api/predict 200 in 3674ms
+ POST /api/rag/advisor 200 in 11904ms

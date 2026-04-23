@@ -8,10 +8,17 @@ interface CreditFormProps {
   errors: FieldErrors<CreditInput>;
 }
 
-// NOTE: UI labels are in Thai for end-user UX, but option values remain in
-// English because the LGBM model was trained on an English dataset
-// (e.g. Sex: Male/Female, Occupation: Engineer, Marital_status: Single/Married).
-// Do not translate the `value=` attributes below.
+// NOTE: UI labels are in Thai for end-user UX, but the `value=` attributes
+// MUST exactly match the categorical labels the LGBM model was trained on
+// (auto-detected from data/loan_dataset.csv):
+//   Sex            → Male / Female
+//   Marriage_Status→ Single / Married / Divorced
+//   Occupation     → Salaried_Employee | Government_or_State_Enterprise |
+//                    SME_Owner | Professional_Specialist | Freelancer_or_Self_Employed
+//   credit_grade   → AA | BB | CC | DD | EE | FF | GG | HH  (8 buckets, not 4)
+//   overdue        → days past due, integer in {0, 15, 30, 60, 90, 120}
+// Sending labels outside these sets makes the OneHotEncoder output all-zero,
+// which silently breaks predictions. Do not localise the value strings.
 export default function CreditForm({ register, errors }: CreditFormProps) {
   return (
     <div className="space-y-6">
@@ -38,7 +45,6 @@ export default function CreditForm({ register, errors }: CreditFormProps) {
             <option value="">เลือก</option>
             <option value="Male">ชาย</option>
             <option value="Female">หญิง</option>
-            <option value="Other">อื่น ๆ</option>
           </select>
           {errors.Sex && (
             <p className="mt-1 text-sm text-red-600">{errors.Sex.message}</p>
@@ -59,7 +65,6 @@ export default function CreditForm({ register, errors }: CreditFormProps) {
             <option value="Single">โสด</option>
             <option value="Married">สมรส</option>
             <option value="Divorced">หย่าร้าง</option>
-            <option value="Widowed">หม้าย</option>
           </select>
           {errors.Marital_status && (
             <p className="mt-1 text-sm text-red-600">{errors.Marital_status.message}</p>
@@ -77,21 +82,17 @@ export default function CreditForm({ register, errors }: CreditFormProps) {
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
           >
             <option value="">เลือก</option>
-            <option value="Engineer">วิศวกร</option>
-            <option value="Teacher">ครู / อาจารย์</option>
-            <option value="Doctor">แพทย์ / พยาบาล</option>
-            <option value="Government Officer">ข้าราชการ</option>
-            <option value="Business Owner">เจ้าของกิจการ</option>
-            <option value="Office Worker">พนักงานบริษัท</option>
-            <option value="Freelancer">ฟรีแลนซ์</option>
-            <option value="Student">นักเรียน / นักศึกษา</option>
-            <option value="Other">อื่น ๆ</option>
+            <option value="Salaried_Employee">พนักงานเงินเดือน (เอกชน)</option>
+            <option value="Government_or_State_Enterprise">ข้าราชการ / รัฐวิสาหกิจ</option>
+            <option value="SME_Owner">เจ้าของกิจการ SME</option>
+            <option value="Professional_Specialist">ผู้ประกอบวิชาชีพเฉพาะ (แพทย์ วิศวกร ทนาย ฯลฯ)</option>
+            <option value="Freelancer_or_Self_Employed">ฟรีแลนซ์ / ประกอบอาชีพอิสระ</option>
           </select>
           {errors.Occupation && (
             <p className="mt-1 text-sm text-red-600">{errors.Occupation.message}</p>
           )}
           <p className="mt-1 text-xs text-gray-500">
-            ค่าที่ส่งให้โมเดลเป็นภาษาอังกฤษเพื่อความเข้ากันได้
+            หมวดอาชีพต้องตรงกับที่โมเดลเรียนรู้มาเท่านั้น (5 หมวด)
           </p>
         </div>
 
@@ -146,59 +147,69 @@ export default function CreditForm({ register, errors }: CreditFormProps) {
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
           >
             <option value="">เลือก</option>
-            <option value="Excellent">ดีเยี่ยม (A)</option>
-            <option value="Good">ดี (B)</option>
-            <option value="Fair">ปานกลาง (C)</option>
-            <option value="Poor">ต่ำ (D/F)</option>
+            <option value="AA">AA — ดีเยี่ยม</option>
+            <option value="BB">BB — ดีมาก</option>
+            <option value="CC">CC — ดี</option>
+            <option value="DD">DD — พอใช้</option>
+            <option value="EE">EE — ปานกลาง</option>
+            <option value="FF">FF — ค่อนข้างต่ำ</option>
+            <option value="GG">GG — ต่ำ</option>
+            <option value="HH">HH — ต่ำมาก</option>
           </select>
           {errors.credit_grade && (
             <p className="mt-1 text-sm text-red-600">{errors.credit_grade.message}</p>
           )}
         </div>
 
-        {/* outstanding */}
+        {/* outstanding — Total existing debt balance */}
         <div>
           <label htmlFor="outstanding" className="block text-sm font-medium text-gray-700 mb-1">
-            หนี้คงค้าง (บาท) <span className="text-red-500">*</span>
+            ภาระหนี้สินรวมในปัจจุบัน (บาท) <span className="text-red-500">*</span>
           </label>
           <input
             type="text"
             id="outstanding"
             {...register('outstanding', {
-              required: 'กรุณาระบุหนี้คงค้าง',
+              required: 'กรุณาระบุภาระหนี้สินรวม',
               pattern: { value: /^\d+(\.\d{1,2})?$/, message: 'กรุณากรอกตัวเลขให้ถูกต้อง' }
             })}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            placeholder="0.00"
+            placeholder="เช่น 50000"
           />
           {errors.outstanding && (
             <p className="mt-1 text-sm text-red-600">{errors.outstanding.message}</p>
           )}
-          <p className="mt-1 text-xs text-gray-500">ยอดหนี้รวมที่ยังค้างอยู่ในปัจจุบัน</p>
+          <p className="mt-1 text-xs text-gray-500">
+            ยอดเงินต้นคงเหลือทุกสินเชื่อรวมกัน (บัตรเครดิต รถ สินเชื่อบุคคล ฯลฯ)
+            ไม่ต้องรวมสินเชื่อบ้านที่กำลังขอใหม่ ใส่ 0 หากไม่มีหนี้
+          </p>
         </div>
 
-        {/* overdue */}
+        {/* overdue — DAYS past due (model expects integer in {0,15,30,60,90,120}) */}
         <div>
           <label htmlFor="overdue" className="block text-sm font-medium text-gray-700 mb-1">
-            ยอดค้างชำระ (บาท) <span className="text-red-500">*</span>
+            จำนวนวันค้างชำระสูงสุดในประวัติ <span className="text-red-500">*</span>
           </label>
-          <input
-            type="text"
+          <select
             id="overdue"
-            {...register('overdue', {
-              required: 'กรุณาระบุยอดค้างชำระ',
-              pattern: { value: /^\d+(\.\d{1,2})?$/, message: 'กรุณากรอกตัวเลขให้ถูกต้อง' }
-            })}
+            {...register('overdue', { required: 'กรุณาเลือกจำนวนวันค้างชำระ' })}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            placeholder="0.00"
-          />
+          >
+            <option value="">เลือก</option>
+            <option value="0">0 วัน — ไม่เคยค้างชำระ</option>
+            <option value="15">15 วัน — เคยค้างเล็กน้อย</option>
+            <option value="60">60 วัน — เคยค้างปานกลาง</option>
+            <option value="120">120 วัน — เคยค้างนาน</option>
+          </select>
           {errors.overdue && (
             <p className="mt-1 text-sm text-red-600">{errors.overdue.message}</p>
           )}
-          <p className="mt-1 text-xs text-gray-500">ยอดที่เลยกำหนดชำระ (ถ้าไม่มีใส่ 0)</p>
+          <p className="mt-1 text-xs text-gray-500">
+            จำนวนวันที่เคย <strong>ค้างชำระยาวที่สุด</strong> ในประวัติเครดิตที่ผ่านมา (มาตรฐานเครดิตบูโร)
+          </p>
         </div>
 
-        {/* loan_amount */}
+        {/* loan_amount — training range 500,000 - 7,400,000 */}
         <div>
           <label htmlFor="loan_amount" className="block text-sm font-medium text-gray-700 mb-1">
             วงเงินขอกู้ (บาท) <span className="text-red-500">*</span>
@@ -211,32 +222,62 @@ export default function CreditForm({ register, errors }: CreditFormProps) {
               pattern: { value: /^\d+(\.\d{1,2})?$/, message: 'กรุณากรอกตัวเลขให้ถูกต้อง' }
             })}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            placeholder="0.00"
+            placeholder="เช่น 1500000"
           />
           {errors.loan_amount && (
             <p className="mt-1 text-sm text-red-600">{errors.loan_amount.message}</p>
           )}
-          <p className="mt-1 text-xs text-gray-500">จำนวนเงินที่ต้องการขอกู้</p>
+          <p className="mt-1 text-xs text-gray-500">
+            500,000 – 7,400,000 บาท
+          </p>
         </div>
 
-        {/* Interest_rate */}
+        {/* loan_term — training range 20-30 years (was missing entirely!) */}
+        <div>
+          <label htmlFor="loan_term" className="block text-sm font-medium text-gray-700 mb-1">
+            ระยะเวลาผ่อน (ปี) <span className="text-red-500">*</span>
+          </label>
+          <select
+            id="loan_term"
+            {...register('loan_term', { required: 'กรุณาเลือกระยะเวลาผ่อน' })}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+          >
+            <option value="">เลือก</option>
+            {[20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30].map((y) => (
+              <option key={y} value={String(y)}>
+                {y} ปี
+              </option>
+            ))}
+          </select>
+          {errors.loan_term && (
+            <p className="mt-1 text-sm text-red-600">{errors.loan_term.message}</p>
+          )}
+        </div>
+
+        {/* Interest_rate — training range 5.69 - 5.89%, narrow */}
         <div>
           <label htmlFor="Interest_rate" className="block text-sm font-medium text-gray-700 mb-1">
             อัตราดอกเบี้ย (%) <span className="text-red-500">*</span>
           </label>
           <input
-            type="text"
+            type="number"
+            step="0.01"
+            min="5.5"
+            max="6.0"
             id="Interest_rate"
+            defaultValue="5.75"
             {...register('Interest_rate', {
               required: 'กรุณาระบุอัตราดอกเบี้ย',
               pattern: { value: /^\d+(\.\d{1,2})?$/, message: 'กรุณากรอกเปอร์เซ็นต์ให้ถูกต้อง' }
             })}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            placeholder="0.00"
           />
           {errors.Interest_rate && (
             <p className="mt-1 text-sm text-red-600">{errors.Interest_rate.message}</p>
           )}
+          <p className="mt-1 text-xs text-gray-500">
+            5.69 – 5.89% (default 5.75%)
+          </p>
         </div>
 
         {/* Coapplicant */}

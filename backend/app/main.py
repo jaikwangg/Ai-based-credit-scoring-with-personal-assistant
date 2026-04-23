@@ -6,12 +6,35 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-import httpx
 import joblib
 import shap
 
+# Patch asyncio so sync wrappers (e.g. llama_index QueryEngine.query) can call
+# the async GoogleGenAI / Gemini SDK from inside FastAPI's running event loop.
+import nest_asyncio
+nest_asyncio.apply()
+
 import explain as explain_module
 import predict as predict_module
+
+# Local RAG imports (merged from Ai-Credit-Scoring)
+from app.planner.planning import generate_response
+from app.planner.rag_bridge import (
+    build_shap_json,
+    extract_rag_sources,
+    get_rag_manager,
+    make_rag_lookup,
+)
+from app.rag.advisor import run_advisor
+from app.rag.cache import get_cache
+from app.rag.self_rag import SelfRAGOrchestrator
+from app.schemas.payload import AdvisorProfile
+from app.planner.scoring import compute_plan_inputs
+from app.routes import scoring as scoring_routes, rag as rag_routes
+
+# DB setup (merged from Ai-Credit-Scoring)
+from app.db.database import engine
+from app.db import models as db_models
 
 load_dotenv()
 
@@ -20,13 +43,6 @@ EXPLAINER = None
 
 DEFAULT_MODEL_PATH = "model/lgbm_model.pkl"
 DEFAULT_LOAN_TERM = int(os.getenv("DEFAULT_LOAN_TERM", "26"))
-
-PLANNER_API_BASE_URL = os.getenv("PLANNER_API_BASE_URL", "http://localhost:8001").rstrip("/")
-PLANNER_EXTERNAL_PLAN_PATH = os.getenv("PLANNER_EXTERNAL_PLAN_PATH", "/api/v1/plan/external")
-PLANNER_RAG_QUERY_PATH = os.getenv("PLANNER_RAG_QUERY_PATH", "/api/v1/rag/query")
-_PLANNER_TIMEOUT_FALLBACK = os.getenv("PLANNER_TIMEOUT_SECONDS")
-PLANNER_PLAN_TIMEOUT_SECONDS = float(os.getenv("PLANNER_PLAN_TIMEOUT_SECONDS", _PLANNER_TIMEOUT_FALLBACK or "75"))
-PLANNER_RAG_TIMEOUT_SECONDS = float(os.getenv("PLANNER_RAG_TIMEOUT_SECONDS", _PLANNER_TIMEOUT_FALLBACK or "90"))
 
 
 def load_model() -> None:
@@ -51,11 +67,23 @@ def load_model() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     load_model()
+    # Create DB tables for the scoring service
+    db_models.Base.metadata.create_all(bind=engine)
     yield
 
 
-app = FastAPI(title="Backend Bridge (Model + Ollama RAG Planner)", version="3.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="AI Credit Scoring Backend (Model + RAG Planner)",
+    version="4.0.0",
+    lifespan=lifespan,
+)
 
+# Include RAG/planner routers from merged Ai-Credit-Scoring
+app.include_router(scoring_routes.router, prefix="/api/v1", tags=["Decisioning"])
+app.include_router(rag_routes.router, prefix="/api/v1", tags=["RAG"])
+
+
+# ── Helper functions ────────────────────────────────────────────────────────
 
 def _to_float(value: Any, default: float = 0.0) -> float:
     if value is None or value == "":
@@ -89,21 +117,25 @@ def _to_coapplicant_int(value: Any) -> int:
     return 0
 
 
+_VALID_GRADES = {"AA", "BB", "CC", "DD", "EE", "FF", "GG", "HH"}
+_LEGACY_GRADE_MAP = {
+    "excellent": "AA",
+    "good": "BB",
+    "fair": "CC",
+    "poor": "FF",
+}
+
+
 def _normalize_credit_grade(value: Any) -> str:
     if value is None:
         return "CC"
-
     raw = str(value).strip()
     if not raw:
         return "CC"
-
-    grade_map = {
-        "excellent": "AA",
-        "good": "BB",
-        "fair": "CC",
-        "poor": "FF",
-    }
-    return grade_map.get(raw.lower(), raw)
+    upper = raw.upper()
+    if upper in _VALID_GRADES:
+        return upper
+    return _LEGACY_GRADE_MAP.get(raw.lower(), "CC")
 
 
 def _normalize_credit_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -131,25 +163,43 @@ def _normalize_credit_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     if missing:
         raise ValueError(f"Missing required fields: {', '.join(missing)}")
 
+    warnings: list[str] = []
+    salary = normalized["Salary"] or 0.0
+    if salary > 0 and (salary < 20000 or salary > 270000):
+        warnings.append(f"Salary {salary:,.0f} อยู่นอกช่วง 20,000-270,000 ที่โมเดลเรียนรู้")
+    loan = normalized["loan_amount"] or 0.0
+    if loan > 0 and (loan < 500000 or loan > 7400000):
+        warnings.append(f"loan_amount {loan:,.0f} อยู่นอกช่วง 500k-7.4M ที่โมเดลเรียนรู้")
+    term = normalized["loan_term"] or 0
+    if term and (term < 20 or term > 30):
+        warnings.append(f"loan_term {term} อยู่นอกช่วง 20-30 ปีที่โมเดลเรียนรู้")
+    rate = normalized["Interest_rate"] or 0.0
+    if rate > 0 and (rate < 5.5 or rate > 6.0):
+        warnings.append(f"Interest_rate {rate}% อยู่นอกช่วง 5.5-6.0% ที่โมเดลเรียนรู้")
+    grade = normalized["credit_grade"]
+    if grade and grade not in {"AA", "BB", "CC", "DD", "EE", "FF", "GG", "HH"}:
+        warnings.append(f"credit_grade {grade!r} ไม่ใช่หนึ่งใน 8 grades ของชุดข้อมูล")
+    occ = normalized["Occupation"]
+    valid_occs = {
+        "Salaried_Employee",
+        "Government_or_State_Enterprise",
+        "SME_Owner",
+        "Professional_Specialist",
+        "Freelancer_or_Self_Employed",
+    }
+    if occ and occ not in valid_occs:
+        warnings.append(f"Occupation {occ!r} ไม่ใช่หนึ่งใน 5 หมวดที่โมเดลเรียนรู้")
+    overdue = normalized["overdue"]
+    if overdue not in (None, "") and int(overdue) not in {0, 15, 60, 120}:
+        warnings.append(f"overdue {overdue} ไม่ตรงกับ training bucket {{0,15,60,120}}")
+
+    normalized["_distribution_warnings"] = warnings
     return normalized
 
 
 def _extract_approve_confidence(prediction_result: Dict[str, Any], shap_result: Dict[str, Any]) -> float:
-    """
-    Extract P(approve) from LGBM prediction.
-
-    IMPORTANT label convention:
-    - LGBM was trained with class 1 = DEFAULT (bad borrower), class 0 = PAID (good borrower)
-    - That is the standard Kaggle "Give Me Some Credit" convention.
-    - Therefore `probabilities["1"]` = P(default), and we must INVERT it to get
-      P(approve) = 1 - P(default).
-    - Prior to this fix the code returned P(default) as "approve confidence",
-      which produced a fully inverted decision surface (good profiles → reject,
-      bad profiles → approve with 82% confidence).
-    """
     probabilities = prediction_result.get("probabilities")
     if isinstance(probabilities, dict):
-        # Prefer explicit P(paid) = probabilities["0"]
         paid_raw = probabilities.get("0")
         if paid_raw is None:
             paid_raw = probabilities.get(0)
@@ -159,7 +209,6 @@ def _extract_approve_confidence(prediction_result: Dict[str, Any], shap_result: 
             except (TypeError, ValueError):
                 pass
 
-        # Fallback: invert P(default)
         default_raw = probabilities.get("1")
         if default_raw is None:
             default_raw = probabilities.get(1)
@@ -197,18 +246,8 @@ def _build_external_plan_payload(
     prediction_result: Dict[str, Any],
     shap_result: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    Build payload for planner /plan/external.
-
-    IMPORTANT: LGBM classes are {0: paid, 1: default}.
-    Planner expects {0: reject, 1: approve}, so we SWAP:
-      model_output.probabilities["1"] = P(paid)   = P(approve)
-      model_output.probabilities["0"] = P(default) = P(reject)
-      model_output.prediction         = 1 - raw_prediction
-    SHAP values must also be NEGATED so that positive = helps approval.
-    """
+    """Build payload for planner generate_response (local call, no HTTP)."""
     probabilities = prediction_result.get("probabilities", {}) or {}
-    # LGBM convention: key "0" = P(paid), key "1" = P(default)
     p_paid = _to_float(probabilities.get("0", probabilities.get(0)), 0.0) or 0.0
     p_default = _to_float(probabilities.get("1", probabilities.get(1)), 0.0) or 0.0
     if p_paid == 0.0 and p_default == 0.0:
@@ -216,20 +255,16 @@ def _build_external_plan_payload(
         p_default = 1.0 if raw_pred == 1 else 0.0
         p_paid = 1.0 - p_default
 
-    # Planner semantic: probabilities["1"] = P(approve), ["0"] = P(reject)
     p_approve = p_paid
     p_reject = p_default
 
-    # Invert prediction: LGBM 1 (default) → planner 0 (reject); LGBM 0 (paid) → planner 1 (approve)
     raw_prediction = _to_int(prediction_result.get("prediction"), 0)
     inverted_prediction = 1 - raw_prediction if raw_prediction in (0, 1) else 0
 
-    # SHAP was computed on class=1 (default). Negate so positive = helps approval.
     shap_values = shap_result.get("shap_values", {}) or {}
     shap_payload = {str(k): -float(v) for k, v in shap_values.items()}
 
     return {
-        "request_id": f"bridge-{uuid4().hex[:12]}",
         "user_input": {
             "Salary": float(data["Salary"]),
             "Occupation": data["Occupation"] or "Unknown",
@@ -257,84 +292,67 @@ def _build_external_plan_payload(
     }
 
 
-async def _request_ollama_planner(external_plan_payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    planner_url = f"{PLANNER_API_BASE_URL}{PLANNER_EXTERNAL_PLAN_PATH}"
-
+def _call_local_planner(plan_payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Call planner locally instead of via HTTP."""
     try:
-        timeout = httpx.Timeout(PLANNER_PLAN_TIMEOUT_SECONDS)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(planner_url, json=external_plan_payload)
-    except httpx.TimeoutException:
-        return None, "Planner timed out"
-    except httpx.RequestError as exc:
-        return None, f"Planner unreachable: {exc}"
+        manager = get_rag_manager()
+        rag_lookup = make_rag_lookup(manager.query) if manager else None
 
-    if response.status_code != 200:
-        return None, f"Planner returned {response.status_code}"
+        plan_result = generate_response(
+            user_input=plan_payload["user_input"],
+            model_output=plan_payload["model_output"],
+            shap_json=plan_payload["shap_json"],
+            rag_lookup=rag_lookup,
+        )
+        return plan_result, None
+    except Exception as exc:
+        return None, f"Planner failed: {exc}"
 
+
+def _call_local_rag(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Call RAG query locally instead of via HTTP."""
     try:
-        payload = response.json()
-    except ValueError:
-        return None, "Planner returned invalid JSON"
+        manager = get_rag_manager()
+        if manager is None:
+            return None, "RAG index unavailable"
 
-    if not isinstance(payload, dict):
-        return None, "Planner response has invalid format"
+        cache = get_cache()
+        question = payload["question"]
+        top_k = payload.get("top_k")
 
-    return payload, None
+        cached = cache.get(question, top_k=top_k)
+        if cached is not None:
+            result = cached
+        else:
+            kwargs: Dict[str, Any] = {
+                "question": question,
+                "include_sources": True,
+            }
+            if isinstance(top_k, int) and top_k > 0:
+                kwargs["similarity_top_k"] = top_k
+            result = manager.query(**kwargs)
+            if result.get("answer"):
+                cache.set(question, result, top_k=top_k)
+
+        return result, None
+    except Exception as exc:
+        return None, f"RAG query failed: {exc}"
 
 
-async def _request_planner_rag(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    rag_url = f"{PLANNER_API_BASE_URL}{PLANNER_RAG_QUERY_PATH}"
-
-    try:
-        timeout = httpx.Timeout(PLANNER_RAG_TIMEOUT_SECONDS)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(rag_url, json=payload)
-    except httpx.TimeoutException:
-        return None, "Planner RAG query timed out"
-    except httpx.RequestError as exc:
-        return None, f"Planner RAG unreachable: {exc}"
-
-    if response.status_code != 200:
-        return None, f"Planner RAG returned {response.status_code}"
-
-    try:
-        data = response.json()
-    except ValueError:
-        return None, "Planner RAG returned invalid JSON"
-
-    if not isinstance(data, dict):
-        return None, "Planner RAG response has invalid format"
-
-    return data, None
-
+# ── Endpoints ───────────────────────────────────────────────────────────────
 
 @app.get("/")
 def read_root() -> Dict[str, str]:
-    return {"message": "Backend bridge is running. Use /docs."}
+    return {"message": "AI Credit Scoring Backend is running. Use /docs."}
 
 
 @app.get("/health")
 async def health() -> Dict[str, Any]:
-    planner_health_url = f"{PLANNER_API_BASE_URL}/health"
-    planner_status = "unknown"
-
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            response = await client.get(planner_health_url)
-            planner_status = "ok" if response.status_code == 200 else f"error:{response.status_code}"
-    except Exception:
-        planner_status = "unreachable"
-
+    rag_manager = get_rag_manager()
     return {
         "status": "healthy",
-        "service": "backend-bridge",
-        "planner_api": {
-            "base_url": PLANNER_API_BASE_URL,
-            "status": planner_status,
-            "plan_timeout_seconds": PLANNER_PLAN_TIMEOUT_SECONDS,
-            "rag_timeout_seconds": PLANNER_RAG_TIMEOUT_SECONDS,
-        },
+        "service": "backend-unified",
+        "rag_available": rag_manager is not None,
     }
 
 
@@ -342,42 +360,38 @@ async def health() -> Dict[str, Any]:
 async def predict(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         data = _normalize_credit_payload(payload)
+        distribution_warnings: list[str] = data.pop("_distribution_warnings", []) or []
         prediction_result = predict_module.run_prediction(data, MODEL)
         shap_result = explain_module.compute_shap(data, MODEL, EXPLAINER)
 
         # ── Label inversion ──────────────────────────────────────────────
-        # LGBM classes: {0: paid/good, 1: default/bad}
-        # Frontend expects: {0: rejected, 1: approved}
-        # Invert prediction + confidence + SHAP so the whole response is
-        # expressed in "approval-oriented" semantics.
         raw_prediction = _to_int(prediction_result.get("prediction"), 0)
         prediction = 1 - raw_prediction if raw_prediction in (0, 1) else 0
         confidence = _extract_approve_confidence(prediction_result, shap_result)
 
-        # Negate SHAP so positive = helps approval (matches frontend display)
         raw_shap = shap_result.get("shap_values", {}) or {}
         shap_values = {k: -float(v) for k, v in raw_shap.items()}
 
-        # Probabilities exposed to frontend also in approval-oriented form
         raw_probs = prediction_result.get("probabilities", {}) or {}
         p_paid = _to_float(raw_probs.get("0", raw_probs.get(0)), 0.0) or 0.0
         p_default = _to_float(raw_probs.get("1", raw_probs.get(1)), 0.0) or 0.0
         approval_probabilities = {
-            "0": round(p_default, 6),  # P(reject) = P(default)
-            "1": round(p_paid, 6),      # P(approve) = P(paid)
+            "0": round(p_default, 6),
+            "1": round(p_paid, 6),
         }
 
         model_explanation = _build_fallback_explanation(prediction, confidence, shap_values)
 
-        # Planner payload is built from the ORIGINAL prediction_result;
-        # _build_external_plan_payload handles the inversion internally.
-        external_plan_payload = _build_external_plan_payload(data, prediction_result, shap_result)
-        planner_result, planner_error = await _request_ollama_planner(external_plan_payload)
+        # ── Call planner LOCALLY instead of via HTTP ─────────────────────
+        plan_payload = _build_external_plan_payload(data, prediction_result, shap_result)
+        planner_result, planner_error = _call_local_planner(plan_payload)
 
         planner_explanation: Optional[str] = None
         if planner_result:
             planner_explanation = str(planner_result.get("result_th", "")).strip() or None
             rag_sources = planner_result.get("rag_sources", [])
+            if not rag_sources:
+                rag_sources = extract_rag_sources(planner_result)
         else:
             rag_sources = []
 
@@ -385,7 +399,6 @@ async def predict(payload: Dict[str, Any]) -> Dict[str, Any]:
             "prediction": prediction,
             "confidence": confidence,
             "shap_values": shap_values,
-            # Keep "explanation" for backward compatibility, but force it to be model-based.
             "explanation": model_explanation,
             "model_explanation": model_explanation,
             "planner_explanation": planner_explanation,
@@ -394,6 +407,7 @@ async def predict(payload: Dict[str, Any]) -> Dict[str, Any]:
             "planner": planner_result,
             "planner_error": planner_error,
             "rag_sources": rag_sources,
+            "distribution_warnings": distribution_warnings,
         }
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -412,24 +426,16 @@ async def rag_query(payload: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(top_k, int) and top_k > 0:
         request_payload["top_k"] = top_k
 
-    result, err = await _request_planner_rag(request_payload)
+    result, err = _call_local_rag(request_payload)
     if err:
         raise HTTPException(status_code=503, detail=err)
 
     return result or {"question": question.strip(), "answer": "", "sources": []}
 
 
-PLANNER_ADVISOR_PATH = os.getenv("PLANNER_ADVISOR_PATH", "/api/v1/rag/advisor")
-
-
 @app.post("/rag/advisor")
 async def rag_advisor(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Bridge to planner /rag/advisor.
-
-    Accepts {question, profile{...}} and forwards to the planner's
-    profile-conditioned advisory endpoint. Profile fields are passed through
-    untouched — the planner schema validates them.
-    """
+    """Profile-conditioned advisory — calls RAG advisor locally."""
     question = payload.get("question")
     if not isinstance(question, str) or not question.strip():
         raise HTTPException(status_code=422, detail="question is required")
@@ -438,29 +444,24 @@ async def rag_advisor(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(profile, dict):
         raise HTTPException(status_code=422, detail="profile must be an object")
 
-    request_payload: Dict[str, Any] = {
-        "question": question.strip(),
-        "profile": profile,
-    }
-    top_k = payload.get("top_k")
-    if isinstance(top_k, int) and top_k > 0:
-        request_payload["top_k"] = top_k
-
-    advisor_url = f"{PLANNER_API_BASE_URL}{PLANNER_ADVISOR_PATH}"
     try:
-        timeout = httpx.Timeout(PLANNER_PLAN_TIMEOUT_SECONDS)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(advisor_url, json=request_payload)
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Advisor request timed out")
-    except httpx.RequestError as exc:
-        raise HTTPException(status_code=502, detail=f"Advisor unreachable: {exc}")
+        advisor_profile = AdvisorProfile(**profile)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid profile: {exc}")
 
-    if response.status_code != 200:
-        try:
-            detail = response.json().get("detail", f"Advisor returned {response.status_code}")
-        except Exception:
-            detail = f"Advisor returned {response.status_code}"
-        raise HTTPException(status_code=response.status_code, detail=str(detail))
+    manager = get_rag_manager()
+    if manager is None:
+        raise HTTPException(status_code=503, detail="RAG index unavailable")
 
-    return response.json()
+    try:
+        result = run_advisor(
+            question=question.strip(),
+            profile=advisor_profile,
+            rag_manager=manager,
+            top_k=payload.get("top_k") or 6,
+            use_multihop=bool(payload.get("use_multihop")),
+            use_self_rag=bool(payload.get("use_self_rag")),
+        )
+        return result.model_dump()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Advisor failed: {exc}")

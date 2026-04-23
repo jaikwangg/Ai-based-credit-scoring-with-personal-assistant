@@ -21,9 +21,10 @@ const creditSchema = z.object({
   Marital_status: z.string().min(1, 'กรุณาเลือกสถานภาพสมรส'),
   credit_score: z.string().regex(/^\d*$/, 'กรุณากรอกคะแนนที่ถูกต้อง').optional().or(z.literal('')),
   credit_grade: z.string().optional(),
-  outstanding: z.string().min(1, 'กรุณาระบุหนี้คงค้าง').regex(/^\d+(\.\d{1,2})?$/, 'กรุณากรอกตัวเลขให้ถูกต้อง'),
-  overdue: z.string().min(1, 'กรุณาระบุยอดค้างชำระ').regex(/^\d+(\.\d{1,2})?$/, 'กรุณากรอกตัวเลขให้ถูกต้อง'),
+  outstanding: z.string().min(1, 'กรุณาระบุภาระหนี้สินรวม').regex(/^\d+(\.\d{1,2})?$/, 'กรุณากรอกตัวเลขให้ถูกต้อง'),
+  overdue: z.string().min(1, 'กรุณาเลือกจำนวนวันค้างชำระ').regex(/^(0|15|60|120)$/, 'ค่าที่ยอมรับ: 0, 15, 60, 120 (4 buckets ใน training data)'),
   loan_amount: z.string().min(1, 'กรุณาระบุวงเงินขอกู้').regex(/^\d+(\.\d{1,2})?$/, 'กรุณากรอกตัวเลขให้ถูกต้อง'),
+  loan_term: z.string().min(1, 'กรุณาเลือกระยะเวลาผ่อน').regex(/^(2[0-9]|30)$/, 'ระยะเวลาผ่อนต้องอยู่ระหว่าง 20-30 ปี'),
   Coapplicant: z.string().min(1, 'กรุณาเลือกสถานะผู้กู้ร่วม'),
   Interest_rate: z.string().min(1, 'กรุณาระบุอัตราดอกเบี้ย').regex(/^\d+(\.\d{1,2})?$/, 'กรุณากรอกเปอร์เซ็นต์ให้ถูกต้อง'),
 });
@@ -96,8 +97,9 @@ function buildAdvisorProfile(data: CreditInput): AdvisorProfile {
     credit_score: int(data.credit_score),
     credit_grade: data.credit_grade || undefined,
     outstanding_debt: num(data.outstanding),
-    overdue_amount: num(data.overdue),
+    overdue_days_max: int(data.overdue),
     loan_amount_requested: num(data.loan_amount),
+    loan_term_years: num(data.loan_term),
     interest_rate: num(data.Interest_rate),
   };
 }
@@ -107,8 +109,8 @@ function buildProfileSummary(data: CreditInput, prediction: PredictResponse): st
   return [
     `อาชีพ ${data.Occupation || '-'}`,
     `รายได้ ${data.Salary || '-'} บาท/เดือน`,
-    `หนี้คงค้าง ${data.outstanding || '-'}`,
-    `ค้างชำระ ${data.overdue || '-'}`,
+    `ภาระหนี้สินรวม ${data.outstanding || '-'} บาท`,
+    `จำนวนวันค้างชำระสูงสุด ${data.overdue || '0'} วัน`,
     `ขอกู้ ${data.loan_amount || '-'} ดอกเบี้ย ${data.Interest_rate || '-'}%`,
     `เครดิต ${data.credit_score || '-'} เกรด ${data.credit_grade || '-'}`,
     `ผล ${decisionTh} (P=${(prediction.confidence * 100).toFixed(1)}%)`,
@@ -145,8 +147,9 @@ export default function Home() {
       outstanding: '',
       overdue: '',
       loan_amount: '',
+      loan_term: '25',
       Coapplicant: '',
-      Interest_rate: '',
+      Interest_rate: '5.75',
     },
   });
 
@@ -266,6 +269,7 @@ export default function Home() {
                   plannerExplanation={plannerExplanation}
                   plannerError={plannerError}
                   userInput={creditInput}
+                  distributionWarnings={predictResult.distribution_warnings || []}
                   onTalkToAssistant={handleTalkToAssistant}
                   onBack={handleBackToForm}
                 />

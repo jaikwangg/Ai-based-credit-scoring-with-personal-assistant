@@ -9,6 +9,7 @@ export interface CreditInput {
   outstanding: string;
   overdue: string;
   loan_amount: string;
+  loan_term: string;
   Coapplicant: string;
   Interest_rate: string;
 }

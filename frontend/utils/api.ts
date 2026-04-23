@@ -28,6 +28,7 @@ export interface PredictResponse {
   } | null;
   planner_error?: string | null;
   rag_sources?: Array<Record<string, any>>;
+  distribution_warnings?: string[];
 }
 
 export interface RagQueryResponse {
@@ -54,7 +55,7 @@ export interface AdvisorProfile {
   credit_score?: number;
   credit_grade?: string;
   outstanding_debt?: number;
-  overdue_amount?: number;
+  overdue_days_max?: number;
   loan_amount_requested?: number;
   loan_term_years?: number;
   interest_rate?: number;
