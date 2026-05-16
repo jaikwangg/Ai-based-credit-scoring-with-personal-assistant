@@ -76,11 +76,22 @@ $backendStdErr = Join-Path $logDir "backend.err.log"
 $frontendStdOut = Join-Path $logDir "frontend.out.log"
 $frontendStdErr = Join-Path $logDir "frontend.err.log"
 
+$plannerDir = Join-Path $repoRoot "Ai-Credit-Scoring"
+$plannerEntry = Join-Path $plannerDir "src\api\main.py"
+if (-not (Test-Path $plannerEntry)) {
+    Write-Host "Initializing Ai-Credit-Scoring submodule..."
+    git -C $repoRoot submodule update --init --recursive Ai-Credit-Scoring
+}
+
+if (-not (Test-Path $plannerEntry)) {
+    throw "Ai-Credit-Scoring planner is missing. Run: git submodule update --init --recursive Ai-Credit-Scoring"
+}
+
 Write-Host "Starting planner (8001)..."
 $planner = Start-Process `
     -FilePath "python" `
     -ArgumentList "-m uvicorn src.api.main:app --host 127.0.0.1 --port 8001" `
-    -WorkingDirectory (Join-Path $repoRoot "Ai-Credit-Scoring") `
+    -WorkingDirectory $plannerDir `
     -RedirectStandardOutput $plannerStdOut `
     -RedirectStandardError $plannerStdErr `
     -WindowStyle Hidden `
