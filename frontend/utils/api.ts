@@ -40,6 +40,13 @@ export interface RagQueryResponse {
     category?: string;
     institution?: string;
     score?: number;
+    metadata?: {
+      title?: string;
+      file_name?: string;
+      category?: string;
+      institution?: string;
+      [key: string]: any;
+    };
   }>;
 }
 

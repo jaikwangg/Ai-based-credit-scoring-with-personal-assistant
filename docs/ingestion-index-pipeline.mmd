@@ -1,0 +1,15 @@
+flowchart TD
+    D0[(Raw Thai Policy Documents)]
+    D1[StructuredDocumentParser\nclean_scraped_text + infer_relevance]
+    D2{Relevant?}
+    D3[Quarantine]
+    D4[Metadata Enrichment\ncategory topic cleaning_version]
+    D5[SentenceSplitter\nchunk_size chunk_overlap]
+    D6[Embedding Model\nBAAI bge-m3]
+    D7[VectorStoreIndex.from_documents]
+    D8[(Chroma Collection)]
+    D9[Fingerprint Sanity Check]
+
+    D0 --> D1 --> D2
+    D2 -- No --> D3
+    D2 -- Yes --> D4 --> D5 --> D6 --> D7 --> D8 --> D9

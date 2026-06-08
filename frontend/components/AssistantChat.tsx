@@ -16,6 +16,7 @@ interface Message {
   // Optional structured payload — when present, the message renders as
   // an advisor card instead of plain text.
   advisor?: AdvisorResponse;
+  showSuggestions?: boolean;
 }
 
 interface AssistantChatProps {
@@ -46,29 +47,141 @@ const ADVISORY_QUESTIONS: string[] = [
   'โปรไฟล์ของฉันผ่านเกณฑ์รายได้ขั้นต่ำหรือไม่',
 ];
 
+const ADVISOR_INTENT_TERMS = [
+  'กู้ได้ไหม',
+  'อนุมัติ',
+  'มีโอกาส',
+  'ผมจะ',
+  'ฉันจะ',
+  'โปรไฟล์',
+  'คุณสมบัติ',
+  'ผ่านเกณฑ์',
+  'ปรับปรุง',
+  'แนะนำ',
+  'ควรทำ',
+  'ทำยังไง',
+  'eligible',
+  'qualify',
+];
+
+const ADVISOR_FOLLOWUP_TERMS = [
+  'ปรับปรุง',
+  'ผ่านเกณฑ์',
+  'โปรไฟล์',
+  'โอกาส',
+  'อนุมัติ',
+  'eligible',
+  'qualify',
+];
+
+const LOAN_DOMAIN_TERMS = [
+  'สินเชื่อ',
+  'กู้',
+  'บ้าน',
+  'ธนาคาร',
+  'รายได้',
+  'เงินเดือน',
+  'หนี้',
+  'ภาระ',
+  'เครดิต',
+  'เครดิตบูโร',
+  'ผู้กู้ร่วม',
+  'วงเงิน',
+  'ดอกเบี้ย',
+  'ผ่อน',
+  'ค่างวด',
+  'เอกสาร',
+  'หลักประกัน',
+  'รีไฟแนนซ์',
+  'cimb',
+  'loan',
+  'mortgage',
+  'credit',
+  'bank',
+  'income',
+  'debt',
+  'dsr',
+];
+
+const GREETING_TERMS = ['สวัสดี', 'hello', 'hi'];
+
+const OUT_OF_SCOPE_REPLY =
+  'ตอนนี้ผมช่วยตอบได้เฉพาะเรื่องผลประเมินสินเชื่อบ้าน เงื่อนไข เอกสาร ดอกเบี้ย ค่าธรรมเนียม และแนวทางปรับปรุงโปรไฟล์ผู้กู้จากเอกสารนโยบายที่มีอยู่ครับ';
+
+const GREETING_REPLY =
+  'สวัสดีครับ ถามผมเรื่องผลประเมินสินเชื่อบ้าน เอกสาร เงื่อนไข ดอกเบี้ย หรือวิธีปรับปรุงโอกาสอนุมัติได้เลยครับ';
+
+function normalizeQuestion(question: string): string {
+  return question.trim().toLowerCase();
+}
+
+function hasAnyTerm(text: string, terms: string[]): boolean {
+  return terms.some((term) => text.includes(term));
+}
+
+function isLikelyGreeting(question: string): boolean {
+  const text = normalizeQuestion(question);
+  return text.length <= 20 && hasAnyTerm(text, GREETING_TERMS);
+}
+
+function isLoanRelatedQuestion(question: string): boolean {
+  return hasAnyTerm(normalizeQuestion(question), LOAN_DOMAIN_TERMS);
+}
+
 /**
  * Heuristic: should this question be answered by the profile-conditioned
  * advisor (structured eligibility reasoning) instead of plain RAG?
  */
 function shouldUseAdvisor(question: string, hasProfile: boolean): boolean {
   if (!hasProfile) return false;
-  const triggers = [
-    'กู้ได้ไหม',
-    'อนุมัติ',
-    'มีโอกาส',
-    'ผมจะ',
-    'ฉันจะ',
-    'โปรไฟล์',
-    'คุณสมบัติ',
-    'ผ่านเกณฑ์',
-    'ปรับปรุง',
-    'แนะนำ',
-    'ควรทำ',
-    'ทำยังไง',
-    'eligible',
-    'qualify',
-  ];
-  return triggers.some((t) => question.includes(t));
+  const text = normalizeQuestion(question);
+  const hasAdvisorIntent = hasAnyTerm(text, ADVISOR_INTENT_TERMS);
+  if (!hasAdvisorIntent) return false;
+  return isLoanRelatedQuestion(text) || hasAnyTerm(text, ADVISOR_FOLLOWUP_TERMS);
+}
+
+type SourceLike = {
+  title?: string;
+  metadata?: {
+    title?: unknown;
+    file_name?: unknown;
+    [key: string]: unknown;
+  };
+};
+
+function cleanSourceTitle(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const text = String(value).trim();
+  if (!text) return '';
+  if (
+    ['unknown', 'none', 'null', 'n/a', 'na', 'ไม่ระบุ', 'ไม่ระบุชื่อเอกสาร'].includes(
+      text.toLowerCase()
+    )
+  ) {
+    return '';
+  }
+  return text;
+}
+
+function getSourceTitle(source: SourceLike): string {
+  const metadata = source.metadata || {};
+  return (
+    cleanSourceTitle(source.title) ||
+    cleanSourceTitle(metadata.title) ||
+    cleanSourceTitle(metadata.file_name)
+  );
+}
+
+function dedupeSources<T extends SourceLike & { category?: string }>(sources: T[]): T[] {
+  const seen = new Set<string>();
+  return sources.filter((src) => {
+    const title = getSourceTitle(src) || '';
+    const category = src.category || (src.metadata?.category as string) || '';
+    const key = `${title.toLowerCase()}|${category.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export default function AssistantChat({
@@ -121,10 +234,27 @@ export default function AssistantChat({
       void userProfileSummary; // legacy prop, kept for backwards compat
 
       // Decide between profile-conditioned advisor and plain RAG.
-      // Advisor: when profile is present AND the question is eligibility-style.
-      // Plain RAG: for general factual lookups ("เอกสารใช้อะไรบ้าง").
+      // Advisor also handles short follow-up questions such as
+      // "ฉันควรปรับปรุงอะไรบ้างเพื่อให้ผ่านเกณฑ์" when a profile exists.
       const useAdvisor = shouldUseAdvisor(text, !!advisorProfile);
 
+      if (!useAdvisor && !isLoanRelatedQuestion(text)) {
+        const aiText = isLikelyGreeting(text) ? GREETING_REPLY : OUT_OF_SCOPE_REPLY;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            text: aiText,
+            isUser: false,
+            timestamp: new Date(),
+            showSuggestions: !isLikelyGreeting(text),
+          },
+        ]);
+        return;
+      }
+
+      // Advisor: when profile is present AND the question is eligibility-style.
+      // Plain RAG: for general factual lookups ("เอกสารใช้อะไรบ้าง").
       if (useAdvisor && advisorProfile) {
         const advisor = await queryAdvisor(text, advisorProfile);
         setMessages((prev) => [
@@ -142,16 +272,15 @@ export default function AssistantChat({
         const rawAnswer = (rag.answer || '').trim();
         const ragFailed = !rawAnswer || /ไม่พบข้อมูลในเอกสาร/.test(rawAnswer);
 
+        const uniqueSources = dedupeSources(rag.sources || []);
         const sourceText =
-          rag.sources && rag.sources.length > 0
-            ? `\n\nแหล่งอ้างอิง:\n${rag.sources
+          uniqueSources.length > 0
+            ? `\n\nแหล่งอ้างอิง:\n${uniqueSources
                 .slice(0, 3)
-                .map(
-                  (s, idx) =>
-                    `[${idx + 1}] ${s.title || 'ไม่ระบุชื่อเอกสาร'}${
-                      s.category ? ` (${s.category})` : ''
-                    }`
-                )
+                .map((s, idx) => {
+                  const title = getSourceTitle(s) || 'ไม่ระบุชื่อเอกสาร';
+                  return `[${idx + 1}] ${title}${s.category ? ` (${s.category})` : ''}`;
+                })
                 .join('\n')}`
             : '';
 
@@ -166,6 +295,7 @@ export default function AssistantChat({
             text: aiText,
             isUser: false,
             timestamp: new Date(),
+            showSuggestions: ragFailed,
           },
         ]);
       }
@@ -193,8 +323,10 @@ export default function AssistantChat({
     await askRag(inputMessage);
   };
 
-  // Hide suggested-question chips once the user has sent at least one message.
   const userHasAsked = messages.some((m) => m.isUser);
+  const lastMessage = messages[messages.length - 1];
+  const shouldShowSuggestions =
+    !isTyping && (!userHasAsked || Boolean(lastMessage?.showSuggestions));
 
   return (
     <div className="flex flex-col h-full max-h-[600px] bg-white rounded-xl shadow-sm border border-gray-200">
@@ -229,8 +361,8 @@ export default function AssistantChat({
           </div>
         ))}
 
-        {/* Suggested question chips — only before the user has asked anything */}
-        {!userHasAsked && !isTyping && (
+        {/* Suggested question chips */}
+        {shouldShowSuggestions && (
           <div className="pt-1 space-y-3">
             {advisorProfile && (
               <div>
@@ -425,9 +557,9 @@ function AdvisorCard({ data }: { data: AdvisorResponse }) {
             อ้างอิง
           </p>
           <p className="text-[11px] text-gray-500 leading-relaxed">
-            {data.sources
+            {dedupeSources(data.sources)
               .slice(0, 4)
-              .map((s, i) => `[${i + 1}] ${s.title || 'ไม่ระบุ'}`)
+              .map((s, i) => `[${i + 1}] ${getSourceTitle(s) || 'ไม่ระบุ'}`)
               .join('  ·  ')}
           </p>
         </div>

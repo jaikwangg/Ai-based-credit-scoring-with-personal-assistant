@@ -106,6 +106,11 @@ function buildAdvisorProfile(data: CreditInput): AdvisorProfile {
 
 function buildProfileSummary(data: CreditInput, prediction: PredictResponse): string {
   const decisionTh = prediction.prediction === 1 ? 'น่าจะอนุมัติ' : 'น่าจะถูกปฏิเสธ';
+  const rawProbability = prediction.prediction === 1
+    ? prediction.confidence
+    : 1 - prediction.confidence;
+  const probability = Math.max(0, Math.min(1, rawProbability));
+  const probabilityLabel = prediction.prediction === 1 ? 'P(อนุมัติ)' : 'P(ปฏิเสธ)';
   return [
     `อาชีพ ${data.Occupation || '-'}`,
     `รายได้ ${data.Salary || '-'} บาท/เดือน`,
@@ -113,7 +118,7 @@ function buildProfileSummary(data: CreditInput, prediction: PredictResponse): st
     `จำนวนวันค้างชำระสูงสุด ${data.overdue || '0'} วัน`,
     `ขอกู้ ${data.loan_amount || '-'} ดอกเบี้ย ${data.Interest_rate || '-'}%`,
     `เครดิต ${data.credit_score || '-'} เกรด ${data.credit_grade || '-'}`,
-    `ผล ${decisionTh} (P=${(prediction.confidence * 100).toFixed(1)}%)`,
+    `ผล ${decisionTh} (${probabilityLabel}=${(probability * 100).toFixed(1)}%)`,
   ].join(', ');
 }
 

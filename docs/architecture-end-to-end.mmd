@@ -1,0 +1,51 @@
+flowchart LR
+    U[User]
+
+    subgraph FE[Frontend Layer]
+        UI[Next.js UI]
+        PX[API Proxy Routes]
+    end
+
+    subgraph BE[Backend Layer - FastAPI]
+        PRED[/POST /predict/]
+        RAGQ[/POST /rag/query/]
+        RAGA[/POST /rag/advisor/]
+        ML[LightGBM Pipeline]
+        SHAP[SHAP Explainer]
+        PLAN[Planner generate_response]
+        SCOREV1[/POST /api/v1/score/request/]
+        FM[FeatureMergerService]
+        MR[ModelRunnerService]
+    end
+
+    subgraph RAG[RAG Layer]
+        QEM[QueryEngineManager]
+        ROUTE[Route + Metadata Filter + Validator]
+        LLM[LLM Provider\nOllama or Gemini or OpenAI]
+        CACHE[Query Cache]
+    end
+
+    subgraph DATA[Data Layer]
+        SQL[(SQLite)]
+        CH[(ChromaDB)]
+        DOCS[(Policy Documents)]
+    end
+
+    U --> UI --> PX
+    PX --> PRED
+    PX --> RAGQ
+    PX --> RAGA
+
+    PRED --> ML --> SHAP --> PLAN
+    PLAN --> QEM
+    RAGQ --> QEM
+    RAGA --> QEM
+
+    SCOREV1 --> FM --> MR --> PLAN
+    SCOREV1 --> SQL
+    PRED --> SQL
+
+    QEM --> CACHE
+    QEM --> ROUTE --> CH
+    QEM --> LLM
+    DOCS --> CH

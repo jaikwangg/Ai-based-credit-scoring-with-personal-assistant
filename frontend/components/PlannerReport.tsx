@@ -41,9 +41,14 @@ function classifyLine(raw: string): { type: 'heading' | 'bullet' | 'text' | 'emp
     return { type: 'heading', level: 3, content };
   }
 
-  // Numbered heading "1. ..."
-  if (/^\d+\.\s/.test(line) && line.length < 120) {
-    return { type: 'heading', level: 3, content: line.replace(/^\d+\.\s*/, '') };
+  // Numbered line "1. ..." or "1) ...". Short lines are section headings;
+  // long lines are action items, so render them as separate bullets.
+  const numbered = line.match(/^\d+[\.)]\s+(.+)$/);
+  if (numbered) {
+    const content = numbered[1].trim();
+    return line.length < 120
+      ? { type: 'heading', level: 3, content }
+      : { type: 'bullet', content };
   }
 
   // Bullet "* ..." or "- ..."

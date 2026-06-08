@@ -5,9 +5,15 @@ import PlannerReport from './PlannerReport';
 
 interface RagSource {
   title?: string;
+  source_title?: string;
   category?: string;
   institution?: string;
   score?: number;
+  metadata?: {
+    title?: unknown;
+    file_name?: unknown;
+    [key: string]: unknown;
+  };
 }
 
 interface AssistantPanelProps {
@@ -22,6 +28,30 @@ interface AssistantPanelProps {
   onBack: () => void;
 }
 
+function cleanSourceTitle(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const text = String(value).trim();
+  if (!text) return '';
+  if (
+    ['unknown', 'none', 'null', 'n/a', 'na', 'ไม่ระบุ', 'ไม่ระบุชื่อเอกสาร'].includes(
+      text.toLowerCase()
+    )
+  ) {
+    return '';
+  }
+  return text;
+}
+
+function getSourceTitle(source: RagSource): string {
+  const metadata = source.metadata || {};
+  return (
+    cleanSourceTitle(source.title) ||
+    cleanSourceTitle(source.source_title) ||
+    cleanSourceTitle(metadata.title) ||
+    cleanSourceTitle(metadata.file_name)
+  );
+}
+
 export default function AssistantPanel({
   approved,
   confidence,
@@ -33,13 +63,25 @@ export default function AssistantPanel({
   onToggleChecklist,
   onBack,
 }: AssistantPanelProps) {
-  const pct = Math.round(confidence * 100);
+  const outcomeProbability = Math.max(0, Math.min(1, approved ? confidence : 1 - confidence));
+  const pct = Math.round(outcomeProbability * 100);
   const modeLabel =
     plannerMode === 'approved_guidance'
       ? 'แนวทางสำหรับผู้มีโอกาสอนุมัติ'
       : plannerMode === 'improvement_plan'
       ? 'แผนปรับปรุงโปรไฟล์'
       : 'คำแนะนำจาก AI';
+
+  const uniqueSources = Array.from(
+    new Map(
+      ragSources.map((src) => {
+        const title = getSourceTitle(src) || '';
+        const category = src.category || (src.metadata?.category as string) || '';
+        // Use lowercased title + category as the unique key
+        return [`${title.toLowerCase()}|${category.toLowerCase()}`, src];
+      })
+    ).values()
+  );
 
   return (
     <div className="space-y-6">
@@ -80,7 +122,7 @@ export default function AssistantPanel({
               รายงานผลการวิเคราะห์และข้อเสนอแนะ
             </h2>
             <p className="text-xs text-gray-500 mt-1">
-              สังเคราะห์จากผลโมเดลและเอกสารนโยบายสินเชื่อ (RAG) โดย LLM
+              อ้างอิงจากผลโมเดลและเอกสารนโยบายสินเชื่อ (RAG) เมื่อมีหลักฐาน
             </p>
           </header>
 
@@ -149,19 +191,19 @@ export default function AssistantPanel({
       )}
 
       {/* ── RAG Sources as citations ─────────────────────────── */}
-      {ragSources.length > 0 && (
+      {uniqueSources.length > 0 && (
         <div className="bg-white rounded-2xl shadow-sm p-6 border border-gray-200">
           <div className="flex items-baseline justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-900">
               แหล่งอ้างอิง
             </h3>
             <span className="text-sm text-gray-500">
-              {ragSources.length} เอกสาร
+              {uniqueSources.length} เอกสาร
             </span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {ragSources.map((src, idx) => {
-              const title = src.title || `เอกสารลำดับที่ ${idx + 1}`;
+            {uniqueSources.map((src, idx) => {
+              const title = getSourceTitle(src) || `เอกสารลำดับที่ ${idx + 1}`;
               const meta = [src.institution, src.category].filter(Boolean).join(' · ');
               const scorePct =
                 typeof src.score === 'number' ? Math.round(src.score * 100) : null;

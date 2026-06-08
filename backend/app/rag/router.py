@@ -40,6 +40,34 @@ ROUTE_PRIORITY = [
     "policy_requirement",
 ]
 
+POLICY_ADVISORY_TERMS = (
+    "ปรับปรุง",
+    "ผ่านเกณฑ์",
+    "โปรไฟล์",
+    "โอกาส",
+    "อนุมัติ",
+    "คุณสมบัติ",
+    "รายได้",
+    "เกณฑ์",
+    "ควรทำ",
+    "แนะนำ",
+    "eligible",
+    "qualify",
+)
+
+EXPLICIT_HARDSHIP_TERMS = (
+    "ผ่อนไม่ไหว",
+    "ปรับโครงสร้างหนี้",
+    "พักชำระ",
+    "พักชำระดอกเบี้ย",
+    "พักชำระหนี้",
+    "โควิด",
+    "น้ำท่วม",
+    "ขยายระยะเวลา",
+    "ขยายสัญญา",
+    "ขยายเวลา",
+)
+
 # Queries containing these terms are off-domain / adversarial — force general_info
 # so the validator returns NO_ANSWER instead of leaking policy docs.
 SAFETY_BLOCKLIST: List[str] = [
@@ -86,6 +114,32 @@ def _route_by_keywords(question: str) -> Optional[str]:
     return "general_info"
 
 
+def _route_by_intent_override(question: str) -> Optional[str]:
+    text = (question or "").lower().strip()
+    if not text:
+        return "general_info"
+
+    # Keep genuine debt-relief questions on the hardship route.
+    if _contains_any(text, EXPLICIT_HARDSHIP_TERMS):
+        return None
+
+    explicit_non_policy_terms = (
+        ROUTE_KEYWORDS["interest_structure"]
+        + ROUTE_KEYWORDS["fee_structure"]
+        + ROUTE_KEYWORDS["refinance"]
+    )
+    if _contains_any(text, explicit_non_policy_terms):
+        return None
+
+    # Follow-up questions after scoring often omit "home loan" words:
+    # "ฉันควรปรับปรุงอะไรบ้างเพื่อให้ผ่านเกณฑ์". These should retrieve
+    # eligibility/policy chunks, not debt-restructuring forms.
+    if _contains_any(text, POLICY_ADVISORY_TERMS):
+        return "policy_requirement"
+
+    return None
+
+
 def _route_by_llm(question: str) -> Optional[str]:
     llm = getattr(Settings, "llm", None)
     if llm is None:
@@ -127,6 +181,10 @@ def route_query(question: str) -> str:
     if _contains_any(text, SAFETY_BLOCKLIST):
         logger.debug("Safety blocklist matched — routing to general_info: %r", question)
         return "general_info"
+
+    routed = _route_by_intent_override(question)
+    if routed:
+        return routed
 
     routed = _route_by_keywords(question)
     if routed:
@@ -203,7 +261,13 @@ def build_metadata_filters(router_label: str) -> Optional[MetadataFilters]:
         return MetadataFilters(filters=[_eq_filter("doc_kind", "rate_sheet")])
 
     if router_label == "policy_requirement":
-        return MetadataFilters(filters=[_eq_filter("doc_kind", "policy")])
+        return MetadataFilters(
+            filters=[
+                _eq_filter("doc_kind", "policy"),
+                _eq_filter("category", "policy_requirement"),
+            ],
+            condition=FilterCondition.OR,
+        )
 
     if router_label == "fee_structure":
         return MetadataFilters(filters=[_eq_filter("category", "fee_structure")])
@@ -216,7 +280,6 @@ def build_metadata_filters(router_label: str) -> Optional[MetadataFilters]:
             filters=[
                 _eq_filter("category", "hardship_support"),
                 _eq_filter("category", "consumer_guideline"),
-                _eq_filter("category", "policy_requirement"),
             ],
             condition=FilterCondition.OR,
         )

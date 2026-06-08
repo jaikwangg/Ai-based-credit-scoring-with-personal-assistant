@@ -197,6 +197,57 @@ def _build_context_block(sources: List[Dict[str, Any]], max_chars_per_source: in
     return "\n\n".join(blocks)
 
 
+def _source_display_value(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.lower() in {"unknown", "none", "null", "n/a", "na", "ไม่ระบุ", "ไม่ระบุชื่อเอกสาร"}:
+        return ""
+    return text
+
+
+def _source_display_title(src: Dict[str, Any]) -> str:
+    meta = src.get("metadata", {}) or {}
+    for value in (src.get("title"), meta.get("title"), meta.get("file_name")):
+        title = _source_display_value(value)
+        if title:
+            return title
+    return "Unknown"
+
+
+def _source_display_category(src: Dict[str, Any]) -> str:
+    meta = src.get("metadata", {}) or {}
+    return _source_display_value(src.get("category") or meta.get("category")) or "Uncategorized"
+
+
+def _sources_to_response_sources(raw_sources: List[Dict[str, Any]]) -> List[RAGSource]:
+    response_sources: List[RAGSource] = []
+    seen: set[tuple[str, str]] = set()
+
+    for src in raw_sources:
+        if not isinstance(src, dict):
+            continue
+        meta = src.get("metadata", {}) or {}
+        title = _source_display_title(src)
+        category = _source_display_category(src)
+        key = (title.lower(), category.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        response_sources.append(
+            RAGSource(
+                title=title,
+                category=category,
+                institution=meta.get("institution"),
+                score=src.get("score"),
+            )
+        )
+
+    return response_sources
+
+
 PROMPT_TEMPLATE = """\
 คุณเป็นที่ปรึกษาสินเชื่อมืออาชีพที่วิเคราะห์โปรไฟล์ผู้ขอสินเชื่อโดยอ้างอิงเอกสารนโยบายธนาคารจริง
 
@@ -362,18 +413,8 @@ def run_advisor(
         raw_sources = rag_result.get("sources", []) or []
         trace.total_sources_after_dedup = len(raw_sources)
 
-    # Build sources list for the response
-    response_sources: List[RAGSource] = []
-    for src in raw_sources:
-        meta = src.get("metadata", {}) or {}
-        response_sources.append(
-            RAGSource(
-                title=meta.get("title", "Unknown"),
-                category=meta.get("category", "Uncategorized"),
-                institution=meta.get("institution"),
-                score=src.get("score"),
-            )
-        )
+    # Build sources list for the response (deduplicated)
+    response_sources = _sources_to_response_sources(raw_sources)
 
     # Step 2: build prompt
     profile_block = _format_profile_for_prompt(profile)
@@ -469,17 +510,7 @@ def run_advisor(
                 )
                 wider_sources = wider.get("sources", []) or []
                 if len(wider_sources) > len(raw_sources):
-                    response_sources_2 = []
-                    for src in wider_sources:
-                        meta = src.get("metadata", {}) or {}
-                        response_sources_2.append(
-                            RAGSource(
-                                title=meta.get("title", "Unknown"),
-                                category=meta.get("category", "Uncategorized"),
-                                institution=meta.get("institution"),
-                                score=src.get("score"),
-                            )
-                        )
+                    response_sources_2 = _sources_to_response_sources(wider_sources)
                     context_block_2 = _build_context_block(wider_sources)
                     prompt_2 = PROMPT_TEMPLATE.format(
                         question=question.strip(),

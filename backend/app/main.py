@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from uuid import uuid4
@@ -339,6 +340,82 @@ def _call_local_rag(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], 
         return None, f"RAG query failed: {exc}"
 
 
+def _clean_source_label(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.lower() in {"unknown", "none", "null", "n/a", "na", "ไม่ระบุ", "ไม่ระบุชื่อเอกสาร"}:
+        return ""
+    return text
+
+
+def _source_title_from_content(content: str) -> str:
+    for pattern in (
+        r"TITLE:\s*(.+?)(?:\n|$)",
+        r"title:\s*([^|\]\n]+)",
+        r"\[เอกสาร\s+\d+\]\s*([^\n(]+)",
+    ):
+        match = re.search(pattern, content or "", flags=re.IGNORECASE)
+        if match:
+            title = _clean_source_label(match.group(1))
+            if title:
+                return title
+    return ""
+
+
+def _source_title_from_payload(source: Dict[str, Any]) -> str:
+    metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+    content = str(source.get("content") or source.get("text") or "")
+
+    for candidate in (
+        source.get("title"),
+        metadata.get("title"),
+        _source_title_from_content(content),
+        metadata.get("file_name"),
+    ):
+        title = _clean_source_label(candidate)
+        if title:
+            return title
+
+    for candidate in (metadata.get("source"), metadata.get("file_path")):
+        path = _clean_source_label(candidate)
+        if path:
+            return Path(path).stem.replace("-", " ").replace("_", " ").strip() or path
+
+    return "Unknown"
+
+
+def _flatten_rag_sources(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize raw query_engine sources into the shape used by the frontend."""
+    normalized = dict(result)
+    flat_sources = []
+    seen_sources: set[tuple[str, str]] = set()
+
+    for source in result.get("sources", []) or []:
+        if not isinstance(source, dict):
+            continue
+        metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+        title = _source_title_from_payload(source)
+        category = _clean_source_label(source.get("category") or metadata.get("category")) or "Uncategorized"
+        source_key = (title.lower(), category.lower())
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        flat_sources.append(
+            {
+                "title": title,
+                "category": category,
+                "institution": _clean_source_label(source.get("institution") or metadata.get("institution")) or None,
+                "score": source.get("score"),
+            }
+        )
+
+    normalized["sources"] = flat_sources
+    return normalized
+
+
 # ── Endpoints ───────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -430,7 +507,7 @@ async def rag_query(payload: Dict[str, Any]) -> Dict[str, Any]:
     if err:
         raise HTTPException(status_code=503, detail=err)
 
-    return result or {"question": question.strip(), "answer": "", "sources": []}
+    return _flatten_rag_sources(result or {"question": question.strip(), "answer": "", "sources": []})
 
 
 @app.post("/rag/advisor")
